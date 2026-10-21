@@ -1,0 +1,11 @@
+/target/
+/dist/
+/release-assets/
+.DS_Store
+*.db
+*.db-shm
+*.db-wal
+.env
+/node_modules/
+__pycache__/
+*.py[cod]

@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; font-src data:; worker-src blob:; img-src data: https:; base-uri 'none'; form-action 'none'">
+<style>/* ICONS */</style><style>/* STYLE */</style><style>/* TOOL_STYLE */</style></head><body>
+<header><div id="toolbar" aria-label="编辑工具栏"></div><span class="spacer"></span><button id="export" title="导出 HTML"><i class="bi bi-download"></i></button><button id="print" title="打印"><i class="bi bi-printer"></i></button><button id="save" class="primary">保存 <kbd>⌘S</kbd></button></header>
+<main><div id="empty"><i class="bi bi-journal-text"></i><h1>把想法，留在这里。</h1><p>新建一篇笔记，或登录 OneDrive 继续记录。<br>离线也能写，联网后自动同步。</p><button class="primary" onclick="cnote.action('new')">新建笔记</button></div><article id="document" hidden><div class="eyebrow">CNOTE / PERSONAL NOTEBOOK</div><h1 id="title"></h1><div id="editor" contenteditable="true" spellcheck="true" role="textbox" aria-label="笔记正文" aria-multiline="true" data-placeholder="开始记录… 支持 Markdown 快捷输入"></div></article></main>
+<footer><span id="status">离线模式 · 笔记保存在本机</span><span id="count"></span><span>自动保存 · Markdown</span></footer>
+<dialog id="dialog"><form method="dialog"><h2 id="dialog-title"></h2><div id="dialog-body"></div><div id="dialog-actions"></div></form></dialog>
+<div id="context" hidden></div>
+<!-- TOOL_HTML -->
+<script id="tool-worker-source" type="application/octet-stream">/* TOOL_WORKER */</script>
+<script id="tool-ace-source" type="application/octet-stream">/* TOOL_ACE */</script>
+<script>/* WORKSPACE */</script><script>/* TOOL_SCRIPT */</script><script>/* SCRIPT */</script></body></html>

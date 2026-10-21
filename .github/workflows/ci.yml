@@ -1,0 +1,44 @@
+name: Build and test
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: sh scripts/test-updater.sh
+      - run: sh scripts/test-shortcuts.sh
+      - run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run check:tools
+      - run: npx playwright install chromium webkit
+      - run: npm test
+      - name: Build app bundle
+        run: sh scripts/package.sh debug
+      - name: Native GPUI and WebKit smoke test
+        if: ${{ vars.CNOTE_NATIVE_UI_TESTS == 'true' }}
+        run: python3 scripts/smoke-test.py
+      - run: ditto -c -k --sequesterRsrc --keepParent dist/CNote.app dist/CNote-development.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CNote-macOS-development
+          path: dist/CNote-development.zip

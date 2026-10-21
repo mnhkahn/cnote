@@ -1,0 +1,18 @@
+{
+  "name": "cnote-editor-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/editor.test.cjs tests/tools.test.cjs tests/tools-core.test.cjs",
+    "build:tools": "node scripts/build-tools.cjs",
+    "check:tools": "node scripts/build-tools.cjs --check"
+  },
+  "devDependencies": {
+    "diff": "9.0.0",
+    "esbuild": "0.28.2",
+    "fast-xml-parser": "5.11.2",
+    "fflate": "0.8.3",
+    "playwright": "1.56.1",
+    "sql-formatter": "15.9.0",
+    "xml-formatter": "3.7.0"
+  }
+}

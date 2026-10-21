@@ -1,0 +1,108 @@
+name: Release macOS packages
+
+on:
+  push:
+    tags: ['v*', 'V*', '[0-9]*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: cnote
+        shell: bash
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      RELEASE_ARCH: ${{ matrix.arch }}
+      CNOTE_UPDATE_REPOSITORY: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: cnote
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cnote
+          key: release-${{ matrix.arch }}
+      - name: Test native update restart guard
+        run: sh scripts/test-updater.sh
+      - name: Run Rust tests
+        run: cargo test --locked
+      - name: Build release app
+        run: |
+          version=$(python3 scripts/bundle-info.py --version "$RELEASE_TAG")
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          sh scripts/package.sh release "$version"
+      - name: Archive app
+        run: |
+          mkdir -p release-assets
+          archive="CNote-${RELEASE_VERSION}-macOS-${RELEASE_ARCH}.zip"
+          ditto -c -k --sequesterRsrc --keepParent dist/CNote.app "release-assets/$archive"
+          (cd release-assets && shasum -a 256 "$archive" > "$archive.sha256")
+      - name: Sign update archive and appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "Configure the repository SPARKLE_PRIVATE_KEY secret before releasing." >&2
+            exit 1
+          fi
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | target/sparkle-sdk/bin/generate_appcast \
+            --ed-key-file - \
+            --maximum-deltas 0 \
+            --download-url-prefix "https://github.com/${CNOTE_UPDATE_REPOSITORY}/releases/download/${RELEASE_TAG}/" \
+            -o "release-assets/appcast-${RELEASE_ARCH}.xml" release-assets
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | target/sparkle-sdk/bin/sign_update \
+            --verify --ed-key-file - "release-assets/appcast-${RELEASE_ARCH}.xml"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: cnote/release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create release if needed and upload packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          # Publish after both app packages are built.
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "CNote $RELEASE_TAG"
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
