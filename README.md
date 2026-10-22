@@ -69,20 +69,22 @@ open dist/CNote.app
 
 ## GitHub Actions 与自动更新
 
-- `ci.yml`：push/PR 检查格式、Clippy、Rust 测试、原生升级保护、打包元数据和 Chromium/WebKit 编辑器测试，提供可下载的开发应用 ZIP。
-- `release.yml`：推送递增的稳定版本标签（如 `v0.1.0`）后，分别构建 Apple Silicon / Intel 应用；两者成功后创建 GitHub Release 并上传 ZIP、SHA-256、架构对应的签名 appcast。
+- `ci.yml`：普通分支 push / PR 只做检查和构建，提供可下载的开发应用 ZIP，不创建 Release，也不更新自动升级源。检查格式、Clippy、Rust 测试、原生升级保护、打包元数据和 Chromium/WebKit 编辑器测试。
+- `release.yml`：只有推送稳定版本标签（如 `v0.1.0`，也支持 `V0.1.0` / `0.1.0`）才发布，没有手动发布入口。编译前先检查签名密钥和版本号，再分别构建 Apple Silicon / Intel 应用；两者成功后创建 GitHub Release 并上传 ZIP、SHA-256、架构对应的签名 appcast。
 - Sparkle 2.10.0 按 SHA-256 固定下载；更新包和 appcast 都签名并在解压前验证。每小时自动检查，可在侧栏手动检查；安装/重启等待编辑缓冲落盘。自动更新仅在打包后的 `.app` 中启用。
 
-本次已生成 CNote 独立的 Ed25519 密钥：公钥位于 `assets/update-public-key.txt`；私钥仅在本机 Keychain 的 Sparkle 账号 `com.cyeam.cnote` 中。首次发布前，运行下面的脚本将私钥从 Keychain 传给仓库 Actions secret；中间文件位于私有临时目录，脚本退出时删除：
+CNote 使用独立的 Ed25519 密钥：公钥位于 `assets/update-public-key.txt`；私钥保存在本机 Keychain 的 Sparkle 账号 `com.cyeam.cnote` 和仓库 Actions secret `SPARKLE_PRIVATE_KEY` 中。首次配置新仓库或恢复 secret 时，运行下面的脚本；脚本先核对公钥，再将原有私钥传给 GitHub，中间文件位于私有临时目录，退出时删除：
 
 ```sh
 # 需要 gh 已登录且有仓库 secret 写入权限；只需执行一次
-sh scripts/configure-signing.sh
+bash scripts/configure-signing.sh
 ```
 
 私钥与公钥必须保持配对并跨版本保留。默认更新源是 `mnhkahn/cnote`；构建其他仓库时设置 `CNOTE_UPDATE_REPOSITORY=owner/repo`。首个带更新组件的版本需手动安装，此后跟踪 GitHub 最新正式 Release。发布包目前使用本地 ad-hoc 签名；如需通过 Gatekeeper 无提示分发，需自行配置 Apple Developer ID 签名与公证。
 
 ## 验证
+
+编辑器测试保留缓存切换处理 p95 < 16ms 的要求；下一帧测试交错测量空闲帧，以实测空闲帧 p95 的两倍（最低 35ms）为上限，记录两组延迟，避免把共享 CI runner 的整体调度延迟算作编辑器回退。
 
 ```sh
 cargo fmt --all -- --check

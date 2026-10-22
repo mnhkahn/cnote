@@ -126,17 +126,23 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
     console.log(name,'cached switch latency (ms)',timing);
     assert(timing.p95<16,`p95 ${timing.p95}ms exceeds one 60Hz frame`);
    });
-   await t.test('cached long-note switch reaches the next frame within two refresh intervals',async()=>{
+   await t.test('cached long-note switch fits two measured refresh intervals',{timeout:15000},async()=>{
     const timing=await page.evaluate(async()=>{
-     const times=[];for(let i=0;i<24;i++){
+     // Interleave idle frames: shared CI runners can delay rAF even without a switch.
+     // Keep the separate 16ms interaction budget; compare rendering against idle rAF.
+     const times=[],idle=[];for(let i=0;i<24;i++){
       await new Promise(resolve=>requestAnimationFrame(resolve));
+      const idleStart=performance.now();
+      await new Promise(resolve=>requestAnimationFrame(resolve));idle.push(performance.now()-idleStart);
       const start=performance.now();cnote.action('open',{id:i%2?'perf-b':'perf-a'});
       await new Promise(resolve=>requestAnimationFrame(resolve));times.push(performance.now()-start);
      }
-     times.sort((a,b)=>a-b);return {p50:times[12],p95:times[22],max:times.at(-1)};
+     times.sort((a,b)=>a-b);idle.sort((a,b)=>a-b);
+     return {p50:times[12],p95:times[22],max:times.at(-1),idleP95:idle[22]};
     });
     console.log(name,'next-frame switch latency (ms)',timing);
-    assert(timing.p95<35,`next-frame p95 ${timing.p95}ms exceeds two 60Hz refresh intervals`);
+    const budget=Math.max(35,timing.idleP95*2);
+    assert(timing.p95<budget,`next-frame p95 ${timing.p95}ms exceeds two measured refresh intervals (${budget}ms; idle p95 ${timing.idleP95}ms)`);
    });
    await t.test('large document and screenshot' ,async()=>{
     const start=performance.now();await receive({type:'load',id:'large',title:'日常与灵感',html:'<h2>今天，记录一个新的开始。</h2><p>本地优先，随时记录。OneDrive 让想法跟随你。</p><ul><li>把复杂的事情，写得清楚一点。</li><li>留一点空间，给下一个灵感。</li></ul><div><input type="checkbox" checked><label>开始使用 CNote</label></div><p><br></p>'+'<p>性能测试 · 保留原始 HTML 与中文输入体验。</p>'.repeat(1500)});assert(performance.now()-start<5000);
