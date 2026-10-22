@@ -28,6 +28,29 @@ impl Workspace {
             Self::Csv => "table",
         }
     }
+    /// Public website entry points. URLs only select a workspace.
+    pub fn from_url(value: &str) -> Option<Self> {
+        if value.len() > 128 {
+            return None;
+        }
+        let url = url::Url::parse(value).ok()?;
+        if url.scheme() != "cnote"
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.port().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return None;
+        }
+        match (url.host_str()?, url.path().trim_end_matches('/')) {
+            ("open", "") => Some(Self::Notes),
+            ("tool", "/text") => Some(Self::Text),
+            ("tool", "/diff") => Some(Self::Diff),
+            ("tool", "/csv") => Some(Self::Csv),
+            _ => None,
+        }
+    }
     pub fn from_message(message: &str) -> Option<Self> {
         if message.len() > 128 {
             return None;
@@ -58,6 +81,34 @@ mod tests {
         }
     }
     #[test]
+    fn website_urls_select_the_four_workspaces() {
+        for (url, page) in [
+            ("cnote://open", Workspace::Notes),
+            ("cnote://tool/text", Workspace::Text),
+            ("cnote://tool/diff", Workspace::Diff),
+            ("cnote://tool/csv", Workspace::Csv),
+        ] {
+            assert_eq!(Workspace::from_url(url), Some(page));
+            assert_eq!(Workspace::from_url(&format!("{url}/")), Some(page));
+        }
+    }
+    #[test]
+    fn website_urls_reject_unknown_routes_and_parameters() {
+        for url in [
+            "https://tool/text",
+            "cnote://tool/delete",
+            "cnote://open/note",
+            "cnote://tool/text?content=overwrite",
+            "cnote://tool/text#fragment",
+            "cnote://user@tool/text",
+            "cnote://tool:123/text",
+            "cnote:///tool/text",
+            "invalid",
+        ] {
+            assert_eq!(Workspace::from_url(url), None, "{url}");
+        }
+    }
+    #[test]
     fn remote_ipc_cannot_issue_notebook_commands() {
         for message in [
             r#"{"type":"change","html":"overwrite"}"#,
@@ -78,6 +129,7 @@ static SHORTCUTS: std::sync::OnceLock<async_channel::Sender<Workspace>> =
 unsafe extern "C" {
     fn cnote_workspace_install(callback: extern "C" fn(u32)) -> std::ffi::c_int;
     fn cnote_workspace_test_key(index: u32);
+    fn cnote_workspace_test_navigation(index: u32, shift: std::ffi::c_int);
 }
 extern "C" fn shortcut(index: u32) {
     if let Some(page) = Workspace::ALL.get(index as usize)
@@ -96,6 +148,12 @@ pub fn install_shortcuts(tx: async_channel::Sender<Workspace>) {
 pub fn test_key(page: Workspace) {
     unsafe {
         cnote_workspace_test_key(page.index() as u32);
+    }
+}
+
+pub fn test_navigation(index: u32, shift: bool) {
+    unsafe {
+        cnote_workspace_test_navigation(index, i32::from(shift));
     }
 }
 

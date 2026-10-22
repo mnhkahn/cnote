@@ -84,7 +84,7 @@
    captureEditors();if(state.text!==original){status('处理期间内容已修改，已保留新输入');return;}
    const doc=textEditor.session.getDocument(),last=doc.getLength()-1;
    textEditor.session.replace(new (ace.require('ace/range').Range)(0,0,last,doc.getLine(last).length),value);
-   if(op==='format'){const mode=$('text-mode').value;if(['json','xml','sql'].includes(mode))textEditor.session.setMode('ace/mode/'+mode);}
+   if(op==='format'){const mode=$('text-mode').value;if(['json','xml','sql'].includes(mode))textEditor.session.setMode('ace/mode/'+mode);else if(['ai-text','text'].includes(mode))textEditor.session.setMode('ace/mode/text');}
    status('处理完成 · ⌘Z 可撤销');
   }catch{}
  }
@@ -165,11 +165,13 @@
  document.addEventListener('keydown',event=>{
   if(!workspace||!(event.metaKey||event.ctrlKey)||event.isComposing)return;
   const key=event.key.toLowerCase();if(key==='s'){event.preventDefault();event.stopImmediatePropagation();flush();}
-  if(workspace===3&&key==='z'){event.preventDefault();event.stopImmediatePropagation();$(event.shiftKey?'table-redo':'table-undo').click();}
+  if(workspace===3&&key==='z'&&!event.target.closest('input,textarea,[contenteditable=true]')){event.preventDefault();event.stopImmediatePropagation();$(event.shiftKey?'table-redo':'table-undo').click();}
  },true);
  function edit(command){
+  const focused=document.activeElement;
+  if(focused?.matches('input:not(.ace_text-input),textarea:not(.ace_text-input),[contenteditable=true]')){document.execCommand(command);return;}
   if(workspace===3&&(command==='undo'||command==='redo')){$(command==='undo'?'table-undo':'table-redo').click();return;}
-  const instance=workspace===1?textEditor:lastEditor;
+  const instance=workspace===1?textEditor:workspace===2?lastEditor:null;
   if(instance&&(command==='undo'||command==='redo')){instance[command]();return;}
   if(instance&&command==='selectAll'){instance.selectAll();instance.focus();return;}
   document.execCommand(command);

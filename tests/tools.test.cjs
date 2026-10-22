@@ -20,6 +20,30 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' lo
    assert((await page.locator('#tool-text-editor .ace_text-layer').textContent()).includes('9007199254740993123'));
    await page.screenshot({path:path.join('/tmp','cnote-local-text-'+name+'.png')});
   });
+  await t.test('editing menu targets the focused input instead of the text editor',async()=>{
+   await page.locator('#text-pattern').fill('pattern');
+   await page.evaluate(()=>cnoteTools.edit('selectAll'));
+   assert.deepEqual(await page.locator('#text-pattern').evaluate(el=>[el.selectionStart,el.selectionEnd]),[0,7]);
+   assert.equal(await page.locator('#text-pattern').evaluate(el=>document.activeElement===el),true);
+   await page.evaluate(()=>ace.edit('tool-text-editor').focus());
+   await page.evaluate(()=>cnoteTools.edit('selectAll'));
+   assert.equal(await page.evaluate(()=>ace.edit('tool-text-editor').getSelectedText()),await page.evaluate(()=>cnoteTools.state.text));
+  });
+  await t.test('AI text formats through the offline worker and remains undoable',async()=>{
+   const input='第一段被截\r\n    断了。\r\n\r\n    Hello\r\n    world\r\n    https://example.com/long\r\n    /path.html';
+   await page.locator('#text-mode').selectOption('auto');
+   await page.evaluate(value=>ace.edit('tool-text-editor').setValue(value,-1),input);
+   const original=await page.evaluate(()=>cnoteTools.state.text);
+   await page.getByRole('button',{name:'格式化',exact:true}).click();
+   await page.waitForFunction(()=>cnoteTools.state.text==='第一段被截断了。\n\nHello world https://example.com/long/path.html');
+   await page.evaluate(()=>cnoteTools.edit('undo'));
+   assert.equal(await page.evaluate(()=>cnoteTools.state.text),original.replace(/\r\n/g,'\n'));
+   await page.locator('#text-mode').selectOption('ai-text');
+   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('没有缩进\n也能手动合并',-1));
+   await page.getByRole('button',{name:'格式化',exact:true}).click();
+   await page.waitForFunction(()=>cnoteTools.state.text==='没有缩进也能手动合并');
+   await page.locator('#text-mode').selectOption('auto');
+  });
   await t.test('an asynchronous transform cannot overwrite newer typing',async()=>{
    await page.evaluate(()=>{window.originalWorkerPost=Worker.prototype.postMessage;Worker.prototype.postMessage=function(...args){if(args[0].task==='textOp')setTimeout(()=>originalWorkerPost.apply(this,args),150);else originalWorkerPost.apply(this,args);};ace.edit('tool-text-editor').setValue('{"old":1}',-1);});
    await page.getByRole('button',{name:'格式化',exact:true}).click();

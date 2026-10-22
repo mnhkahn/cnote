@@ -31,7 +31,17 @@ fn run() -> anyhow::Result<()> {
     }
     analytics::start(directory.clone());
     let engine = engine::start(directory.join("notes.db"));
-    gpui_platform::application().run(move |cx: &mut App| {
+    let application = gpui_platform::application();
+    let (url_tx, url_rx) = async_channel::unbounded();
+    // Register before launch so cold-start URLs wait for the window to exist.
+    application.on_open_urls(move |urls| {
+        for url in urls {
+            if let Some(page) = workspace::Workspace::from_url(&url) {
+                let _ = url_tx.try_send(page);
+            }
+        }
+    });
+    application.run(move |cx: &mut App| {
         if let Err(e) = cx
             .text_system()
             .add_fonts(vec![Cow::Borrowed(include_bytes!(
@@ -61,14 +71,30 @@ fn run() -> anyhow::Result<()> {
             },
             move |window, cx| cx.new(|cx| ui::Notebook::new(window, cx, engine)),
         );
-        match result {
-            Ok(window) => menus::install(cx, window),
+        let window = match result {
+            Ok(window) => window,
             Err(e) => {
                 eprintln!("CNote window: {e:#}");
                 cx.quit();
                 return;
             }
-        }
+        };
+        menus::install(cx, window);
+        cx.spawn(async move |cx| {
+            while let Ok(page) = url_rx.recv().await {
+                if window
+                    .update(cx, |notebook, window, cx| {
+                        notebook.switch_workspace(page, window, cx);
+                        window.activate_window();
+                        cx.activate(true);
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         updater::start();
         updater::set_blocked(false);
         cx.activate(true);

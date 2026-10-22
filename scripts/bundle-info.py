@@ -50,6 +50,11 @@ def main():
         info = {
             "CFBundleName": "CNote", "CFBundleDisplayName": "CNote",
             "CFBundleIdentifier": "com.cyeam.cnote", "CFBundleExecutable": "CNote",
+            "CFBundleURLTypes": [{
+                "CFBundleURLName": "com.cyeam.cnote",
+                "CFBundleURLSchemes": ["cnote"],
+                "CFBundleTypeRole": "Viewer",
+            }],
             "CFBundleIconFile": "AppIcon", "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version, "CFBundleVersion": version,
             "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True,

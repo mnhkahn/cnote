@@ -261,15 +261,23 @@ impl Notebook {
     fn deliver(&self, event: Event, cx: &mut Context<Self>) {
         if matches!(&event, Event::Load { .. }) {
             let generation = self.cache_generation;
+            let smoke_load = smoke() && matches!(&event, Event::Load { id, .. } if !id.is_empty());
             cx.spawn(async move |this, cx| {
                 let serialized = cx
                     .background_executor()
                     .spawn(async move { serde_json::to_string(&event) })
                     .await;
                 if let Ok(serialized) = serialized {
-                    let _ = this.update(cx, |this, _| {
+                    let _ = this.update_in(cx, |this, window, cx| {
                         if this.cache_generation == generation {
                             this.js(&format!("window.cnote&&cnote.receive({serialized})"));
+                            if smoke_load {
+                                // Edit only after the asynchronous load has reached WebKit.
+                                this.js("document.getElementById('editor').innerHTML='<p>Native WebKit → IPC → SQLite ✓</p>';document.getElementById('editor').dispatchEvent(new Event('input',{bubbles:true}))");
+                                this.switch_workspace(Workspace::Csv, window, cx);
+                                // Quit from a tool: hidden notes must still flush.
+                                this.js("cnote.action('close')");
+                            }
                         }
                     });
                 }
@@ -294,6 +302,17 @@ impl Notebook {
                     cx.quit();
                     return;
                 }
+                if self.workspace == Workspace::Text
+                    && !v["navigation_checked"].as_bool().unwrap_or(false)
+                {
+                    self.js("window.navigationOriginal=ace.edit('tool-text-editor').getValue();ace.edit('tool-text-editor').setValue('first\\nsecond\\nthird',-1);ace.edit('tool-text-editor').focus()");
+                    workspace::test_navigation(2, false);
+                    self.js("(()=>{let attempts=0;function check(){const editor=ace.edit('tool-text-editor');const text=editor.getValue(),row=editor.getCursorPosition().row;const unchanged=text==='first\\nsecond\\nthird';if(unchanged&&row!==1&&++attempts<80)return setTimeout(check,25);editor.setValue(window.navigationOriginal,-1);window.ipc.postMessage(JSON.stringify({type:'native_tool_smoke',index:1,navigation_checked:true,...(unchanged&&row===1?{}:{error:'ArrowDown changed text or did not move: '+JSON.stringify({text,row})})}));}setTimeout(check,25);})()");
+                    return;
+                }
+                if v["navigation_checked"].as_bool() == Some(true) {
+                    eprintln!("CNOTE_SMOKE_NAVIGATION_OK");
+                }
                 let expected = [
                     Workspace::Text,
                     Workspace::Diff,
@@ -315,6 +334,8 @@ impl Notebook {
             }
             "ready" => {
                 self.ready = true;
+                // A launch URL may select a tool before the web page is ready.
+                self.js(&format!("cnoteTools.show({})", self.workspace.index()));
                 for e in std::mem::take(&mut self.pending) {
                     self.deliver(e, cx);
                 }
@@ -405,7 +426,7 @@ impl Notebook {
             }
         }).detach();
     }
-    fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
+    fn event(&mut self, event: Event, _window: &mut Window, cx: &mut Context<Self>) {
         if let Event::State {
             cache_generation,
             cache_account,
@@ -434,7 +455,6 @@ impl Notebook {
             return;
         }
         let mut redraw = false;
-        let smoke_load = smoke() && matches!(&event,Event::Load{id,..} if !id.is_empty());
         match &event {
             Event::State {
                 notes,
@@ -491,12 +511,6 @@ impl Notebook {
             self.deliver(event, cx);
         } else {
             self.pending.push(event);
-        }
-        if smoke_load {
-            self.js("document.getElementById('editor').innerHTML='<p>Native WebKit → IPC → SQLite ✓</p>';document.getElementById('editor').dispatchEvent(new Event('input',{bubbles:true}))");
-            self.switch_workspace(Workspace::Csv, window, cx);
-            // Quit from a tool: the hidden notebook must still flush every draft.
-            self.js("cnote.action('close')");
         }
         if redraw {
             cx.notify();
@@ -669,70 +683,75 @@ impl Render for Notebook {
                             .child("CNote"),
                     ),
             )
-            .child(
-                div()
-                    .px_3()
-                    .pb_3()
-                    .text_size(px(12.))
-                    .text_color(rgb(muted))
-                    .child(self.button("new", "plus-lg", "新建笔记", "new", cx)),
-            )
-            .child(
-                div()
-                    .px_4()
-                    .py_2()
-                    .flex()
-                    .justify_between()
-                    .text_size(px(10.))
-                    .text_color(rgb(muted))
-                    .child("我的笔记")
-                    .child(format!("{:02}", self.notes.len())),
-            )
-            .child(list)
-            .when(self.notes.is_empty(), |d| {
+            .when(self.workspace == Workspace::Notes, |d| {
                 d.child(
                     div()
-                        .px_5()
-                        .py_4()
+                        .px_3()
+                        .pb_3()
                         .text_size(px(12.))
                         .text_color(rgb(muted))
-                        .child("点击上方新建，开始记录。"),
+                        .child(self.button("new", "plus-lg", "新建笔记", "new", cx)),
+                )
+                .child(
+                    div()
+                        .px_4()
+                        .py_2()
+                        .flex()
+                        .justify_between()
+                        .text_size(px(10.))
+                        .text_color(rgb(muted))
+                        .child("我的笔记")
+                        .child(format!("{:02}", self.notes.len())),
+                )
+                .child(list)
+                .when(self.notes.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .px_5()
+                            .py_4()
+                            .text_size(px(12.))
+                            .text_color(rgb(muted))
+                            .child("点击上方新建，开始记录。"),
+                    )
+                })
+                .child(
+                    div()
+                        .border_t_1()
+                        .border_color(rgb(line))
+                        .p_3()
+                        .text_size(px(12.))
+                        .text_color(rgb(muted))
+                        .child(self.button(
+                            "login",
+                            "cloud",
+                            if self.authenticated {
+                                "注销 OneDrive"
+                            } else {
+                                "登录 OneDrive"
+                            },
+                            if self.authenticated {
+                                "logout"
+                            } else {
+                                "login"
+                            },
+                            cx,
+                        ))
+                        .when(!self.account.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .px_3()
+                                    .text_size(px(10.))
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(self.account.clone()),
+                            )
+                        })
+                        .child(self.button("refresh", "arrow-repeat", "同步笔记 ⌘S", "save", cx)),
                 )
             })
-            .child(
-                div()
-                    .border_t_1()
-                    .border_color(rgb(line))
-                    .p_3()
-                    .text_size(px(12.))
-                    .text_color(rgb(muted))
-                    .child(self.button(
-                        "login",
-                        "cloud",
-                        if self.authenticated {
-                            "注销 OneDrive"
-                        } else {
-                            "登录 OneDrive"
-                        },
-                        if self.authenticated {
-                            "logout"
-                        } else {
-                            "login"
-                        },
-                        cx,
-                    ))
-                    .when(!self.account.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .px_3()
-                                .text_size(px(10.))
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(self.account.clone()),
-                        )
-                    })
-                    .child(self.button("refresh", "arrow-repeat", "同步笔记 ⌘S", "save", cx)),
-            )
+            .when(self.workspace != Workspace::Notes, |d| {
+                d.child(div().flex_1())
+            })
             .child(self.workspace_bar(active, muted, cx));
         let view = self.active_view().cloned();
         let last = self.web_bounds.clone();

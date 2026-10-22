@@ -7,6 +7,42 @@ test('JSON formatting and table import preserve integers beyond IEEE754',()=>{
  assert.deepEqual(c.importTable({format:'json',text:'[{"id":9007199254740993123}]'}),[['id'],['9007199254740993123']]);
  assert.throws(()=>c.format('{"broken":}'));
 });
+test('AI table copy restores header, records, Chinese text and split URLs', () => {
+    const url = 'https://wwj.shanxi.gov.cn/wwzy/wwlb/bkydww/qgzdwwbhdw/zh/202109/t20210908_1981994';
+    const input = `序号    建筑名称    年代    公布批次    类别    所在市    所在县    国保编号
+    简注    数据来源URL
+    1    云冈石窟    北魏    1    石窟寺及石刻    大同市    云冈区    1    中国三大石
+    窟之一，北魏皇家石窟群，世界文化遗产；第八批吴官屯、鲁班窑石窟并入
+    ${url}
+    .shtml
+    2    羊头山石窟    北魏至唐    6    石窟寺及石刻    晋城市    高平市    2    北魏
+    至唐摩崖造像石窟群
+    ${url}
+    .shtml`;
+    const expected = `序号    建筑名称    年代    公布批次    类别    所在市    所在县    国保编号    简注    数据来源URL
+1    云冈石窟    北魏    1    石窟寺及石刻    大同市    云冈区    1    中国三大石窟之一，北魏皇家石窟群，世界文化遗产；第八批吴官屯、鲁班窑石窟并入    ${url}.shtml
+2    羊头山石窟    北魏至唐    6    石窟寺及石刻    晋城市    高平市    2    北魏至唐摩崖造像石窟群    ${url}.shtml`;
+    assert.equal(c.format(input), expected);
+    assert.equal(c.format(input, 'ai-text'), expected);
+    assert.equal(c.format(expected), expected);
+});
+
+test('handles CRLF, tabs and paragraphs while preserving English word spacing', () => {
+    const input = '第一段被截\r\n\t断了。\r\n\r\n\tHello\r\n\tworld\r\n\thttps://example.com/long\r\n\t/path.html';
+    assert.equal(c.format(input), '第一段被截断了。\n\nHello world https://example.com/long/path.html');
+});
+
+test('AI formatting keeps structured formats and ordinary text intact',()=>{
+ for(const value of ['普通文本','第一行\n第二行','第一行\n    第二行\n第三行'])assert.equal(c.format(value),value);
+ const ai='第一行\n    第二行';
+ assert.equal(c.format(ai,'text'),ai);
+ assert.equal(c.format('第一行\n第二行','ai-text'),'第一行第二行');
+ assert.equal(c.format('第一行\r\u3000第二行\r\u3000第三行'),'第一行第二行第三行');
+ assert.equal(c.format('{\n    "name":"云冈石窟"\n    }'),'{\n  "name": "云冈石窟"\n}');
+ assert.throws(()=>c.format('{\n    "name":\n    }'));
+ assert(c.format('<root>\n    <name>云冈石窟</name>\n    </root>').includes('<name>云冈石窟</name>'));
+ assert(c.format('select name from sites').includes('SELECT'));
+});
 test('text transforms match line cleaning, regex, literal deletion and one-based cut',()=>{
  assert.equal(c.textOp({text:'b\n\na\nb',op:'trim-empty'}),'b\na\nb');
  assert.equal(c.textOp({text:'b\n\na\nb',op:'unique'}),'\na\nb');

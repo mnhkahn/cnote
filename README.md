@@ -14,11 +14,12 @@ open dist/CNote.app
 ```
 
 - 原生 GPUI 窗口、虚拟化笔记列表、跟随系统的深浅色主题、侧边栏折叠和专注模式。
-- 左下角工具切换：`⌘1` 笔记、`⌘2` 文本处理（JSONPack）、`⌘3` Diff、`⌘4` CSV。三个工具均为本地实现，在同一个内嵌编辑区域内切换；不嵌套在线页面、不下载运行时代码。Cocoa 原生事件监视器在 WKWebView / Ace 获得焦点时也处理快捷键，菜单“视图”保留对应入口。
+- 左下角工具切换：`⌘1` 笔记、`⌘2` 文本处理（JSONPack）、`⌘3` Diff、`⌘4` CSV。工具页隐藏笔记列表、新建和同步区域，保留工作区切换入口。三个工具均为本地实现，在同一个内嵌编辑区域内切换；不嵌套在线页面、不下载运行时代码。Cocoa 原生事件监视器在 WKWebView / Ace 获得焦点时也处理快捷键，菜单“视图”保留对应入口。
 - 富文本：粗体、斜体、下划线、删除线、代码、三级标题、有序/无序列表、缩进、撤销/重做、清除格式。
 - Markdown 快捷输入：行首 `#`、`##`、`###`、`-`、`*`、`1.`、`>`、`[]`、`[ ]` 后按空格。
 - 待办勾选会序列化到 HTML；表格支持插入和右键增删行列；支持粘贴图片、链接与富文本。
 - 本机自动保存、OneDrive 自动同步、手动保存、刷新、删除确认、HTML 导出和系统打印。
+- `⌘A` 全选、`⌘C` 复制、`⌘V` 粘贴、`⌘X` 剪切、`⌘Z` 撤销、`⇧⌘Z` 重做，作用于当前输入框或编辑器。
 - `⌘S` 保存、`⌘N` 新建、`⌘\` 折叠侧边栏、`⌘Q` 退出。Windows/Linux 尚未适配。
 
 点击“登录 OneDrive”，在系统浏览器输入应用显示的 Microsoft 设备码。沿用 `cyeam-cli` 的 Microsoft 应用 ID、个人账号和权限范围。登录凭据仅存储于 macOS Keychain（服务 `com.cyeam.cnote`），不进入 SQLite、网页或日志。该账号必须拥有 OneDrive；实际登录、同步和跨设备冲突需要用个人 Microsoft 账号验证。
@@ -55,7 +56,7 @@ open dist/CNote.app
 
 ## 本地工具
 
-- 文本：本地 Ace 代码编辑器，支持多光标 / Option 列选择、撤销重做、JSON / XML / SQL 格式化、JSON 压缩、去空行、合并换行、排序去重、正则按行过滤、字面字符删除、分隔符提取列和字符换行。JSON 格式化保留大整数原始字面值。
+- 文本：本地 Ace 代码编辑器，支持多光标 / Option 列选择、撤销重做、JSON / XML / SQL / AI 文本格式化、JSON 压缩、去空行、合并换行、排序去重、正则按行过滤、字面字符删除、分隔符提取列和字符换行。JSON 格式化保留大整数原始字面值。AI 文本自动识别固定缩进、清理行首空白、合并断行文字和 URL，保留表格记录与空行分段；也可手动选择 AI 文本格式。
 - Diff：双侧编辑、实时行差异、两侧排序 / 去重 / 格式化、复制新增或删除内容，结果分页显示，不创建海量 DOM。
 - 表格：导入 CSV / TSV、JSON、JSONL、Markdown、HTML、SQL INSERT、Excel；编辑单元格和表头、增删行列、数值排序、筛选保留、去重、转置、计数统计、撤销重做；导出 CSV、JSON、JSONL、Markdown、HTML、SQL、Excel，通过原生保存对话框选择文件。打印 / PDF 使用 macOS 打印窗口。
 
@@ -86,6 +87,26 @@ bash scripts/configure-signing.sh
 
 早期本机开发包曾误标为 0.1.0，而线上发布从 0.0.x 开始；Sparkle 会按正常版本顺序阻止安装这些较低版本。使用修正版本号的本地构建替换一次后，后续 0.0.x 的递增更新即可正常检查和安装。
 
+## 从网页打开
+
+安装应用后，网页可用以下链接启动 CNote，或激活已运行的窗口并切换工作区：
+
+| 入口 | URL | 快捷键 |
+| --- | --- | --- |
+| 笔记 | `cnote://open` | ⌘1 |
+| 文本处理 | `cnote://tool/text` | ⌘2 |
+| 文本对比 | `cnote://tool/diff` | ⌘3 |
+| CSV 表格 | `cnote://tool/csv` | ⌘4 |
+
+```html
+<a href="cnote://open">打开笔记</a>
+<a href="cnote://tool/text">打开文本处理</a>
+<a href="cnote://tool/diff">打开文本对比</a>
+<a href="cnote://tool/csv">打开 CSV 表格</a>
+```
+
+浏览器可能会询问是否打开 CNote。链接只切换工作区，不接受内容、笔记操作或其他参数。需要重新打包并安装包含 URL Scheme 注册信息的 `.app`；直接运行 `cargo run` 不会向系统注册链接。安装后可用 `open 'cnote://tool/text'` 验证。
+
 ## 验证
 
 编辑器测试保留缓存切换处理 p95 < 16ms 的要求；下一帧测试交错测量空闲帧，以实测空闲帧 p95 的两倍（最低 35ms）为上限，记录两组延迟，避免把共享 CI runner 的整体调度延迟算作编辑器回退。
@@ -96,6 +117,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 sh scripts/test-updater.sh
 sh scripts/test-shortcuts.sh
+CNOTE_NATIVE_UI_TESTS=1 sh scripts/test-shortcuts.sh # 真实 WKWebView 编辑快捷键、方向键和 Shift 选择（需要图形会话）
 python3 -m unittest discover -s tests -p 'test_*.py'
 npm ci
 npm run check:tools

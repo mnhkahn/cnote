@@ -54,6 +54,11 @@ class BundleTests(unittest.TestCase):
             subprocess.run(['python3', str(ROOT / 'scripts/bundle-info.py'), '--version', 'v1.2.3', '--arch', 'arm64', '--output', str(path)], check=True, capture_output=True)
             info = plistlib.loads(path.read_bytes())
             self.assertEqual(info['CFBundleIdentifier'], 'com.cyeam.cnote')
+            self.assertEqual(info['CFBundleURLTypes'], [{
+                'CFBundleURLName': 'com.cyeam.cnote',
+                'CFBundleURLSchemes': ['cnote'],
+                'CFBundleTypeRole': 'Viewer',
+            }])
             self.assertEqual(info['CFBundleShortVersionString'], '1.2.3')
             self.assertEqual(info['CFBundleVersion'], '1.2.3')
             self.assertTrue(info['SURequireSignedFeed'])

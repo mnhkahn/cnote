@@ -19,9 +19,51 @@ function prettyJSON(source){
  }
  return out;
 }
+// 复制的 AI 文本通常从第二个非空行开始带有固定缩进。
+function isAIText(content) {
+    const lines = content.replace(/\r\n?/g, "\n").split("\n").filter((line) => line.trim());
+    if (lines.length < 2) return false;
+    const indent = lines[1].match(/^[ \t\u3000]+/);
+    return !!indent && lines.slice(1).every((line) => line.startsWith(indent[0]));
+}
+
+function formatAIText(content) {
+    const lines = content.replace(/\r\n?/g, "\n").split("\n");
+    const columnSeparator = /(?: {2,}|\t+|\u3000+)/;
+    // 有序号及多列的记录是新行，其余行视为被硬换行截断的内容。
+    const isRecord = (line) => /^\d+(?: {2,}|\t+|\u3000+)/.test(line) && line.split(columnSeparator).length >= 3;
+    const table = lines.some((line) => isRecord(line.trim()));
+    const result = [];
+    let paragraphStart = true;
+    lines.forEach((rawLine) => {
+        const line = rawLine.trim();
+        if (!line) {
+            if (result.length && result[result.length - 1] !== "") result.push("");
+            paragraphStart = true;
+            return;
+        }
+        if (paragraphStart || (table && isRecord(line))) {
+            result.push(line);
+            paragraphStart = false;
+            return;
+        }
+        const previous = result[result.length - 1];
+        let separator = "";
+        if (table && (/^https?:\/\//i.test(line) || (!/^\d/.test(previous) && columnSeparator.test(line)))) {
+            separator = "    ";
+        } else if (!/https?:\/\/\S*$/i.test(previous) && /[a-z0-9]$/i.test(previous) && /^[a-z0-9]/i.test(line)) {
+            // 英文词间保留空格；中文和 URL 的断行直接接回。
+            separator = " ";
+        }
+        result[result.length - 1] += separator + line;
+    });
+    return result.join("\n").trim();
+}
+
 function format(source,mode='auto'){
  check(source);if(!source.trim())return source;
- if(mode==='auto'){const t=source.trim();mode=/^[{[]/.test(t)?'json':t.startsWith('<')?'xml':/^(select|insert|update|delete|with|create|alter|drop)\b/i.test(t)?'sql':'text';}
+ if(mode==='auto'){const t=source.trim();mode=/^[{[]/.test(t)?'json':t.startsWith('<')?'xml':isAIText(source)?'ai-text':/^(select|insert|update|delete|with|create|alter|drop)\b/i.test(t)?'sql':'text';}
+ if(mode==='ai-text')return formatAIText(source);
  if(mode==='json')return prettyJSON(source);
  if(mode==='xml'){const valid=XMLValidator.validate(source);if(valid!==true)throw Error(valid.err?.msg||'XML 格式错误');return xmlFormatter(source,{indentation:'  ',collapseContent:true,whiteSpaceAtEndOfSelfclosingTag:true});}
  if(mode==='sql')return sqlFormatter.format(source,{language:'sql',keywordCase:'upper',tabWidth:2});
