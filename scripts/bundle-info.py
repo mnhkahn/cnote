@@ -7,6 +7,7 @@ import platform
 import pathlib
 import plistlib
 import re
+import subprocess
 
 
 def version_number(tag):
@@ -15,18 +16,34 @@ def version_number(tag):
     return tag.lstrip("vV")
 
 
+def resolve_version(tag="", root=None):
+    if tag:
+        return version_number(tag)
+    root = root or pathlib.Path(__file__).resolve().parent.parent
+    result = subprocess.run(
+        ["git", "tag", "--merged", "HEAD"], cwd=root,
+        capture_output=True, text=True, check=False,
+    )
+    versions = []
+    if result.returncode == 0:
+        for candidate in result.stdout.splitlines():
+            try:
+                versions.append(version_number(candidate))
+            except ValueError:
+                continue
+    if not versions:
+        raise ValueError("No reachable stable Git tag; fetch tags or pass --version v1.2.3 explicitly")
+    return max(versions, key=lambda value: tuple(map(int, value.split("."))))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", default="")
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--arch", choices=["arm64", "x86_64"], default=os.environ.get("RELEASE_ARCH", platform.machine()))
     args = parser.parse_args()
-    tag = args.version
-    if not tag:
-        manifest = (pathlib.Path(__file__).resolve().parent.parent / "Cargo.toml").read_text()
-        tag = re.search(r'^version\s*=\s*"([^"]+)"', manifest, re.MULTILINE).group(1)
     try:
-        version = version_number(tag)
+        version = resolve_version(args.version)
     except ValueError as error:
         parser.error(str(error))
     if args.output:

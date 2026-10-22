@@ -7,6 +7,7 @@
  const dialog=document.getElementById('dialog'), body=document.getElementById('dialog-body'), actions=document.getElementById('dialog-actions');
  let id='',active=null,serial=0,intent=0,selection=null,contextCell=null;
  const notes=new Map(),pendingWrites=new Set();
+ const warmups=new Map();let warmTimer=null,cacheGeneration=0,cacheAccount=null,lastInput=0,syncRequested=false;
  let countTimer=null,pruneTimer=null,scrollPosition=0;
  main.addEventListener('scroll',()=>{scrollPosition=main.scrollTop;if(active)active.scroll=scrollPosition;},{passive:true});
  let composing=false,pendingLoad=null,dialogKind='',dialogQueue=[],pendingAction=null;
@@ -35,7 +36,7 @@
  function record(noteId,noteTitle='',html=null){
   const node=editorTemplate.cloneNode(false);
   const pane=document.createElement('div');pane.className='editor-pane';pane.setAttribute('aria-hidden','true');pane.append(node);
-  const n={id:noteId,title:noteTitle,node,pane,height:0,source:html,seq:0,saved:0,sent:0,timer:null,loaded:html!==null,scroll:0,selection:null,count:'',bytes:html?.length||0};
+  const n={id:noteId,account:cacheAccount,title:noteTitle,node,pane,height:0,source:html,seq:0,saved:0,sent:0,timer:null,loaded:html!==null,scroll:0,selection:null,count:'',bytes:html?.length||0};
   if(n.loaded)node.innerHTML=sanitize(html);
   node.contentEditable=n.loaded?'true':'false';stack.append(pane);
   n.observer=new ResizeObserver(entries=>{n.height=entries[0].contentRect.height;if(active===n)stack.style.height=n.height+'px';});n.observer.observe(node);
@@ -50,6 +51,43 @@
  }
  function deferCount(){clearTimeout(countTimer);countTimer=setTimeout(count,300);}
  function dispose(n){clearTimeout(n.timer);n.observer.disconnect();n.pane.remove();}
+ function resetCache(generation,account){
+  if(generation<cacheGeneration)return;
+  if(generation===cacheGeneration&&account===cacheAccount)return;
+  const changed=cacheAccount!==null&&account!==cacheAccount;
+  cacheGeneration=generation;cacheAccount=account;warmups.clear();syncRequested=false;
+  if(changed&&active){active.pane.classList.remove('active');active.pane.setAttribute('aria-hidden','true');editor.removeAttribute('id');active=null;id='';selection=null;document.getElementById('document').hidden=true;document.getElementById('empty').style.display='flex';}
+  for(const [key,n]of notes){
+   if(!changed)n.account=account;
+   if(n!==active&&!pending(n)){dispose(n);notes.delete(key);}
+  }
+ }
+ function scheduleWarm(){
+  if(warmTimer!==null||!warmups.size)return;
+  const run=()=>{
+   warmTimer=null;
+   if(composing||Date.now()-lastInput<300){scheduleWarm();return;}
+   const entry=warmups.entries().next().value;if(!entry)return;
+   const [key,event]=entry;warmups.delete(key);
+   if(event.generation===cacheGeneration){
+    let n=notes.get(key);
+    if(n!==active&&(!n||!pending(n))){
+     if(!n)n=record(key,event.title,event.html);
+     else if(n.source!==event.html){n.node.innerHTML=sanitize(event.html);n.source=event.html;n.bytes=event.html.length;n.loaded=true;n.node.contentEditable='true';n.selection=null;}
+     n.title=event.title;prune();
+    }
+   }
+   scheduleWarm();
+  };
+  warmTimer=window.requestIdleCallback?requestIdleCallback(run):setTimeout(run,60);
+ }
+ function preload(event){
+  if(event.generation!==cacheGeneration||typeof event.html!=='string'||event.html.length>512*1024)return;
+  warmups.delete(event.id);warmups.set(event.id,event);
+  while(warmups.size>8)warmups.delete(warmups.keys().next().value);
+  scheduleWarm();
+ }
+ function finishSync(){if(syncRequested&&!pendingWrites.size){syncRequested=false;post({type:'save',id});}}
  function prune(){
   clearTimeout(pruneTimer);pruneTimer=setTimeout(()=>{
    let clean=[...notes.values()].filter(n=>n!==active&&!pending(n));
@@ -69,6 +107,7 @@
  }
  function changed(){
   if(!active?.loaded)return;
+  lastInput=Date.now();
   const wasPending=pendingWrites.size>0,wasNotePending=pending(active);if(active.seq===active.sent)active.due=performance.now()+1000;active.seq=++serial;pendingWrites.add(id);
   if(!wasNotePending)post({type:'editing',id});
   if(!wasPending)post({type:'dirty'});
@@ -165,9 +204,9 @@
    case 'new':askNew();break;
    case 'delete':deleteNote(data.id,data.title);break;
    case 'focus':document.body.classList.toggle('focus');break;
-   case 'save':{const n=active;setTimeout(()=>{flush(n,true);post({type:'save',id:n?.id||''});},0);break;}
+   case 'save':setTimeout(()=>{window.cnoteTools?.flush();syncRequested=true;flushAll();finishSync();},0);break;
    case 'close':case 'login':case 'logout':(window.cnoteTools?.barrier||((next)=>next()))(()=>barrier(()=>{
-    if(type==='logout'){for(const n of notes.values())dispose(n);notes.clear();}
+    if(type==='logout'){warmups.clear();syncRequested=false;for(const n of notes.values())dispose(n);notes.clear();}
     navigate(type,data);
    }));break;
    default:post({type,id,...data});
@@ -175,6 +214,8 @@
  }
  function receive(e){
   switch(e.type){
+   case 'cache_reset':resetCache(e.generation,e.account);break;
+   case 'preload':preload(e);break;
    case 'tool_state':case 'tool_saved':case 'tool_save_failed':window.cnoteTools?.receive(e);break;
    case 'load':{
     if(e.intent!==undefined&&e.intent<intent)return;
@@ -196,15 +237,18 @@
     n.saved=Math.max(n.saved,Math.min(n.seq,e.seq));
     if(!pending(n)){pendingWrites.delete(n.id);post({type:'settled',id:n.id});prune();}
     if(!pendingWrites.size){updateGuard();if(pendingAction){const next=pendingAction;pendingAction=null;queueMicrotask(next);}}
+    if(syncRequested){for(const note of notes.values())if(note.seq>note.sent)flush(note);finishSync();}
+    if(n!==active&&!pending(n)&&n.account!==cacheAccount){dispose(n);notes.delete(n.id);}
     if(n===active){document.getElementById('status').textContent='已保存到本机';document.getElementById('status').style.color='';}
     break;
    }
    case 'save_failed':{
+    syncRequested=false;
     const n=notes.get(e.id);if(n&&e.seq>n.saved){n.sent=n.saved;pendingAction=null;schedule(n,3000);}
     document.getElementById('status').textContent=`${n?.title||'笔记'}：保存失败，草稿保留在内存中，将自动重试。${e.message}`;
     document.getElementById('status').style.color='#ca5262';break;
    }
-   case 'state':if(e.intent===undefined||e.intent>=intent){document.getElementById('status').textContent=e.status;document.getElementById('status').style.color='';}break;
+   case 'state':if(e.cache_generation!==undefined)resetCache(e.cache_generation,e.cache_account);if(e.intent===undefined||e.intent>=intent){document.getElementById('status').textContent=e.status;document.getElementById('status').style.color='';}break;
    case 'error':document.getElementById('status').textContent=e.message;document.getElementById('status').style.color='#ca5262';break;
    case 'dialog':{
     const d=e.data;

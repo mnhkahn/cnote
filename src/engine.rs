@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::{
         Arc,
@@ -20,11 +20,14 @@ pub enum Command {
     Web(Value),
     SerializedChange(String),
     Network(u64, Box<Reply>),
+    Prefetched(u64, Box<Reply>),
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     State {
+        cache_generation: u64,
+        cache_account: String,
         intent: u64,
         notes: Vec<Summary>,
         selected: Option<String>,
@@ -37,6 +40,10 @@ pub enum Event {
         id: String,
         title: String,
         html: String,
+    },
+    Preload {
+        generation: u64,
+        script: String,
     },
     Selected {
         id: String,
@@ -96,6 +103,10 @@ struct Engine {
     retry: HashMap<String, Instant>,
     asked: HashSet<(String, i64)>,
     next_sync: Instant,
+    warm_queue: VecDeque<String>,
+    warmed: HashSet<String>,
+    prefetch_queue: VecDeque<String>,
+    prefetching: Option<String>,
 }
 impl Engine {
     fn emit(&self, e: Event) {
@@ -103,6 +114,8 @@ impl Engine {
     }
     fn state(&self) -> Result<()> {
         self.emit(Event::State {
+            cache_generation: self.generation.load(Ordering::SeqCst),
+            cache_account: self.account.clone(),
             intent: self.intent,
             notes: self.db.list(&self.account)?,
             selected: self.selected.clone(),
@@ -125,7 +138,7 @@ impl Engine {
             "笔记不属于当前账号"
         );
         self.selected = Some(id.into());
-        if !cached {
+        if !cached && (n.remote_id.is_none() || n.etag.is_some() || n.dirty) {
             self.emit(Event::Load {
                 intent: self.intent,
                 id: n.id.clone(),
@@ -140,7 +153,137 @@ impl Engine {
             id: id.into(),
             intent: self.intent,
         });
+        self.plan_warmup()?;
         Ok(())
+    }
+    fn plan_warmup(&mut self) -> Result<()> {
+        let notes = self.db.list(&self.account)?;
+        let selected = notes
+            .iter()
+            .position(|n| Some(n.id.as_str()) == self.selected.as_deref())
+            .unwrap_or(0);
+        let mut indices = Vec::with_capacity(9);
+        if !notes.is_empty() {
+            indices.push(selected);
+        }
+        for offset in 1..9 {
+            if let Some(index) = selected.checked_sub(offset) {
+                indices.push(index);
+            }
+            if selected + offset < notes.len() {
+                indices.push(selected + offset);
+            }
+            if indices.len() >= 9 {
+                break;
+            }
+        }
+        let ids: HashSet<_> = indices
+            .iter()
+            .take(9)
+            .map(|&i| notes[i].id.clone())
+            .collect();
+        self.warmed.retain(|id| ids.contains(id));
+        self.warm_queue = indices
+            .into_iter()
+            .take(9)
+            .map(|i| notes[i].id.clone())
+            .filter(|id| Some(id.as_str()) != self.selected.as_deref() && !self.warmed.contains(id))
+            .collect();
+        Ok(())
+    }
+    fn preload(&self, note: &Note) {
+        if note.html.len() > 512 * 1024
+            || (note.remote_id.is_some() && note.etag.is_none() && !note.dirty)
+        {
+            return;
+        }
+        let generation = self.generation.load(Ordering::SeqCst);
+        // Serialize on the storage worker; the UI only forwards the prepared script.
+        let data = json!({"type":"preload","generation":generation,"id":note.id,"title":note.title,"html":note.html});
+        self.emit(Event::Preload {
+            generation,
+            script: format!("window.cnote&&cnote.receive({data})"),
+        });
+    }
+    fn warm_next(&mut self) -> Result<()> {
+        if let Some(id) = self.warm_queue.pop_front() {
+            let Ok(note) = self.db.get(&id) else {
+                return Ok(());
+            };
+            if !note.deleted && (note.account.is_empty() || note.account == self.account) {
+                self.preload(&note);
+                self.warmed.insert(id);
+            }
+        }
+        Ok(())
+    }
+    fn prefetch_next(&mut self) -> Result<()> {
+        if !self.authenticated || self.prefetching.is_some() {
+            return Ok(());
+        }
+        while let Some(id) = self.prefetch_queue.pop_front() {
+            let Ok(mut note) = self.db.get(&id) else {
+                continue;
+            };
+            if note.deleted
+                || note.dirty
+                || note.conflict
+                || note.account != self.account
+                || self.editing.contains(&id)
+                || self.selected.as_deref() == Some(id.as_str())
+            {
+                continue;
+            }
+            note.html.clear();
+            note.baseline.clear();
+            self.prefetching = Some(id);
+            self.job(Job::Prefetch(note));
+            break;
+        }
+        Ok(())
+    }
+    fn prefetched(&mut self, epoch: u64, reply: Reply) -> Result<()> {
+        if epoch != self.generation.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.prefetching = None;
+        if let Reply::Content { sent, html, etag } = reply {
+            let Ok(mut note) = self.db.get(&sent.id) else {
+                return Ok(());
+            };
+            if note.deleted
+                || note.dirty
+                || note.conflict
+                || self.editing.contains(&note.id)
+                || note.account != self.account
+                || note.remote_id != sent.remote_id
+                || note.revision != sent.revision
+                || note.etag != sent.etag
+            {
+                return Ok(());
+            }
+            note.html = html.clone();
+            note.baseline = html;
+            note.etag = Some(etag);
+            self.db.put(&note)?;
+            if self.selected.as_deref() == Some(note.id.as_str()) {
+                self.emit(Event::Load {
+                    intent: self.intent,
+                    id: note.id,
+                    title: note.title,
+                    html: note.html,
+                });
+            } else {
+                self.preload(&note);
+            }
+        }
+        Ok(())
+    }
+    fn reset_cache(&mut self) {
+        self.warm_queue.clear();
+        self.warmed.clear();
+        self.prefetch_queue.clear();
+        self.prefetching = None;
     }
     fn refresh(&mut self) {
         if self.authenticated {
@@ -264,15 +407,14 @@ impl Engine {
                 });
             }
             "ready" => {
-                if let Some(id) = self.selected.clone() {
-                    let n = self.db.get(&id)?;
-                    self.emit(Event::Load {
-                        intent: self.intent,
-                        id: n.id,
-                        title: n.title,
-                        html: n.html,
-                    });
+                if let Some(id) = self
+                    .selected
+                    .clone()
+                    .or(self.db.first_cached_id(&self.account)?)
+                {
+                    self.show(&id)?;
                 }
+                self.plan_warmup()?;
                 self.state()?;
             }
             "open" => self.show_cached(id, v["cached"].as_bool().unwrap_or(false))?,
@@ -304,13 +446,22 @@ impl Engine {
                 self.next_sync = Instant::now() + Duration::from_secs(2);
             }
             "save" => {
-                self.retry.remove(id);
+                self.retry.clear();
                 self.next_sync = Instant::now();
                 self.sync()?;
+                self.refresh();
+                self.status = if self.authenticated {
+                    "正在同步到 OneDrive…"
+                } else {
+                    "已保存到本机 · 登录后自动同步"
+                }
+                .into();
+                self.state()?;
             }
             "refresh" => self.refresh(),
             "login" => {
                 self.generation.fetch_add(1, Ordering::SeqCst);
+                self.reset_cache();
                 self.authenticated = false;
                 self.inflight.clear();
                 self.status = "正在请求 Microsoft 登录码…".into();
@@ -319,6 +470,7 @@ impl Engine {
             }
             "logout" => {
                 self.generation.fetch_add(1, Ordering::SeqCst);
+                self.reset_cache();
                 self.job(Job::Logout);
                 self.authenticated = false;
                 self.account.clear();
@@ -452,6 +604,10 @@ impl Engine {
             }),
             Reply::Account { id, name } => {
                 let changed = self.account != id;
+                if changed {
+                    self.generation.fetch_add(1, Ordering::SeqCst);
+                    self.reset_cache();
+                }
                 self.account = id;
                 self.name = name;
                 self.authenticated = true;
@@ -477,24 +633,28 @@ impl Engine {
                 self.authenticated = false;
                 self.status = "离线模式 · 笔记保存在本机".into();
             }
-            Reply::List(items) => {
+            Reply::List(mut items) => {
+                items.sort_by(|a, b| b.modified.cmp(&a.modified));
+                self.prefetch_queue.clear();
                 let ids: HashSet<_> = items.iter().map(|n| n.id.clone()).collect();
                 for item in items {
-                    if let Some(mut n) = self.db.find_remote(&self.account, &item.id)? {
-                        if !n.dirty
-                            && n.etag.as_deref() != Some(item.etag.as_str())
-                            && self.selected.as_deref() == Some(&n.id)
-                        {
-                            self.job(Job::Get(n.clone()));
+                    if let Some((id, etag, dirty)) = self.db.update_remote_metadata(
+                        &self.account,
+                        &item.id,
+                        &display_title(&item.name),
+                        remote_modified(&item.modified),
+                    )? {
+                        if !dirty && etag.as_deref() != Some(item.etag.as_str()) {
+                            if self.selected.as_deref() == Some(id.as_str()) {
+                                self.job(Job::Get(self.db.get(&id)?));
+                            } else {
+                                self.prefetch_queue.push_back(id);
+                            }
                         }
-                        if !n.dirty {
-                            n.modified = remote_modified(&item.modified);
-                        }
-                        n.title = display_title(&item.name);
-                        self.db.put(&n)?;
                     } else {
+                        let id = uuid::Uuid::new_v4().to_string();
                         self.db.put(&Note {
-                            id: uuid::Uuid::new_v4().to_string(),
+                            id: id.clone(),
                             account: self.account.clone(),
                             remote_id: Some(item.id),
                             title: display_title(&item.name),
@@ -507,22 +667,18 @@ impl Engine {
                             conflict: false,
                             modified: remote_modified(&item.modified),
                         })?;
+                        self.prefetch_queue.push_back(id);
                     }
                 }
                 // Preserve any locally changed note that vanished from the cloud as a conflict.
-                for s in self.db.list(&self.account)? {
-                    let mut n = self.db.get(&s.id)?;
-                    if n.account == self.account
-                        && n.remote_id.as_ref().is_some_and(|id| !ids.contains(id))
-                        && !self.inflight.contains(&n.id)
-                    {
-                        if n.dirty {
-                            n.conflict = true;
-                            self.db.put(&n)?;
+                for (id, remote, dirty) in self.db.remote_entries(&self.account)? {
+                    if !ids.contains(&remote) && !self.inflight.contains(&id) {
+                        if dirty {
+                            self.db.mark_conflict(&id)?;
                             self.status = "云端笔记已移除；本地草稿保留，可导出 HTML".into();
                         } else {
-                            self.db.remove(&n.id)?;
-                            if self.selected.as_deref() == Some(&n.id) {
+                            self.db.remove(&id)?;
+                            if self.selected.as_deref() == Some(id.as_str()) {
                                 self.selected = None;
                                 self.emit(Event::Load {
                                     intent: self.intent,
@@ -539,6 +695,7 @@ impl Engine {
                 {
                     self.show(&n.id)?;
                 }
+                self.plan_warmup()?;
             }
             Reply::Content { sent, html, etag } => {
                 let Ok(mut n) = self.db.get(&sent.id) else {
@@ -566,6 +723,8 @@ impl Engine {
                             title: n.title,
                             html: n.html,
                         });
+                    } else if changed {
+                        self.preload(&n);
                     }
                 } else if n.html == html {
                     n.etag = Some(etag);
@@ -673,19 +832,29 @@ pub fn start(path: PathBuf) -> Handle {
                 retry: HashMap::new(),
                 asked: HashSet::new(),
                 next_sync: Instant::now(),
+                warm_queue: VecDeque::new(),
+                warmed: HashSet::new(),
+                prefetch_queue: VecDeque::new(),
+                prefetching: None,
             };
             if !(cfg!(debug_assertions) && std::env::var_os("CNOTE_SMOKE_TEST").is_some()) {
                 e.job(Job::Restore);
             }
             let _ = e.state();
             loop {
-                let result = match rx.recv_timeout(Duration::from_secs(1)) {
+                let timeout = if e.warm_queue.is_empty() {
+                    Duration::from_secs(1)
+                } else {
+                    Duration::from_millis(40)
+                };
+                let result = match rx.recv_timeout(timeout) {
                     Ok(Command::Web(v)) => e.dispatch(v),
                     Ok(Command::SerializedChange(s)) => serde_json::from_str(&s)
                         .context("保存数据无法解析")
                         .and_then(|v| e.dispatch(v)),
                     Ok(Command::Network(epoch, r)) => e.network(epoch, *r),
-                    Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
+                    Ok(Command::Prefetched(epoch, r)) => e.prefetched(epoch, *r),
+                    Err(mpsc::RecvTimeoutError::Timeout) => e.warm_next(),
                     Err(_) => break,
                 };
                 if let Err(err) = result {
@@ -694,6 +863,11 @@ pub fn start(path: PathBuf) -> Handle {
                     });
                 }
                 if let Err(err) = e.sync() {
+                    e.emit(Event::Error {
+                        message: format!("{err:#}"),
+                    });
+                }
+                if let Err(err) = e.prefetch_next() {
                     e.emit(Event::Error {
                         message: format!("{err:#}"),
                     });
@@ -728,6 +902,10 @@ mod tests {
             retry: HashMap::new(),
             asked: HashSet::new(),
             next_sync: Instant::now(),
+            warm_queue: VecDeque::new(),
+            warmed: HashSet::new(),
+            prefetch_queue: VecDeque::new(),
+            prefetching: None,
         }
     }
     #[test]

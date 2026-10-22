@@ -41,15 +41,11 @@ pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
         KeyBinding::new("cmd-shift-z", Redo, None),
     ]);
     cx.set_menus([
-        Menu::new("CNote").items([
-            MenuItem::action("检查更新…", CheckUpdates),
-            MenuItem::separator(),
-            MenuItem::action("退出 CNote", Quit),
-        ]),
+        Menu::new("CNote").items([MenuItem::action("退出 CNote", Quit)]),
         Menu::new("文件").items([
             MenuItem::action("新建笔记…", NewNote),
-            MenuItem::action("保存", Save),
-            MenuItem::action("同步笔记", Sync),
+            MenuItem::action("保存并同步笔记", Save),
+            MenuItem::action("刷新云端笔记", Sync),
         ]),
         Menu::new("编辑").items([
             MenuItem::os_action("撤销", Undo, OsAction::Undo),
@@ -68,6 +64,7 @@ pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
             MenuItem::separator(),
             MenuItem::action("显示 / 隐藏侧栏", ToggleSidebar),
         ]),
+        Menu::new("窗口").items([MenuItem::action("检查更新…", CheckUpdates)]),
     ]);
     cx.on_action(move |_: &ShowNotes, cx| {
         let _ = window.update(cx, |v, w, cx| v.switch_workspace(Workspace::Notes, w, cx));

@@ -15,6 +15,7 @@ fn smoke() -> bool {
 }
 pub struct Notebook {
     intent: u64,
+    cache_generation: u64,
     web_bounds: Rc<Cell<Option<WebBounds>>>,
     view: Option<Rc<wry::WebView>>,
     tx: Sender<Command>,
@@ -163,6 +164,7 @@ impl Notebook {
         });
         Self {
             intent: 0,
+            cache_generation: 0,
             web_bounds: Rc::new(Cell::new(None)),
             view,
             tx: handle.tx,
@@ -256,16 +258,28 @@ impl Notebook {
             eprintln!("CNote editor: {e}");
         }
     }
-    fn deliver(&self, event: &Event) {
-        if let Ok(s) = serde_json::to_string(event) {
+    fn deliver(&self, event: Event, cx: &mut Context<Self>) {
+        if matches!(&event, Event::Load { .. }) {
+            let generation = self.cache_generation;
+            cx.spawn(async move |this, cx| {
+                let serialized = cx
+                    .background_executor()
+                    .spawn(async move { serde_json::to_string(&event) })
+                    .await;
+                if let Ok(serialized) = serialized {
+                    let _ = this.update(cx, |this, _| {
+                        if this.cache_generation == generation {
+                            this.js(&format!("window.cnote&&cnote.receive({serialized})"));
+                        }
+                    });
+                }
+            })
+            .detach();
+        } else if let Ok(s) = serde_json::to_string(&event) {
             self.js(&format!("window.cnote&&cnote.receive({s})"));
         }
     }
     pub fn action(&self, kind: &str, data: Value) {
-        if kind == "save" && self.workspace != Workspace::Notes {
-            self.js("window.cnoteTools&&cnoteTools.flush()");
-            return;
-        }
         self.js(&format!(
             "window.cnote&&cnote.action({},{})",
             json!(kind),
@@ -302,7 +316,7 @@ impl Notebook {
             "ready" => {
                 self.ready = true;
                 for e in std::mem::take(&mut self.pending) {
-                    self.deliver(&e);
+                    self.deliver(e, cx);
                 }
                 let _ = self.tx.send(Command::Web(v));
                 if smoke() {
@@ -392,6 +406,25 @@ impl Notebook {
         }).detach();
     }
     fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
+        if let Event::State {
+            cache_generation,
+            cache_account,
+            ..
+        } = &event
+            && *cache_generation >= self.cache_generation
+        {
+            self.cache_generation = *cache_generation;
+            self.js(&format!(
+                "window.cnote&&cnote.receive({})",
+                json!({"type":"cache_reset","generation":cache_generation,"account":cache_account})
+            ));
+        }
+        if let Event::Preload { generation, script } = &event {
+            if self.ready && *generation == self.cache_generation {
+                self.js(script);
+            }
+            return;
+        }
         if let Event::ToolExport { filename, bytes } = event {
             self.export_tool(filename, bytes, cx);
             return;
@@ -410,6 +443,7 @@ impl Notebook {
                 authenticated,
                 status,
                 intent,
+                ..
             } => {
                 self.intent = self.intent.max(*intent);
                 redraw = true;
@@ -454,7 +488,7 @@ impl Notebook {
             _ => {}
         }
         if self.ready {
-            self.deliver(&event);
+            self.deliver(event, cx);
         } else {
             self.pending.push(event);
         }
@@ -532,11 +566,15 @@ impl Render for Notebook {
                     let weak = weak.clone();
                     div()
                         .id(SharedString::from(id.clone()))
-                        .h(px(66.))
-                        .px_3()
-                        .py_2()
+                        .h(px(44.))
+                        .flex()
+                        .flex_col()
+                        .justify_center()
+                        .gap(px(2.))
+                        .px_2()
+                        .py_1()
                         .mx_2()
-                        .rounded_lg()
+                        .rounded_md()
                         .cursor_pointer()
                         .bg(if chosen { rgb(active) } else { rgb(sidebar) })
                         .hover(|d| d.bg(rgb(active)))
@@ -544,10 +582,12 @@ impl Render for Notebook {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_2()
+                                .gap(px(6.))
+                                .line_height(px(18.))
                                 .child(
                                     div()
                                         .font_family("bootstrap-icons")
+                                        .text_size(px(14.))
                                         .text_color(rgb(if chosen { 0x0d6efd } else { muted }))
                                         .child(icons::glyph("file-earmark-text")),
                                 )
@@ -573,9 +613,9 @@ impl Render for Notebook {
                         )
                         .child(
                             div()
-                                .ml(px(23.))
-                                .mt_1()
+                                .ml(px(20.))
                                 .text_size(px(10.))
+                                .line_height(px(12.))
                                 .text_color(rgb(muted))
                                 .child(if n.conflict {
                                     "版本冲突 · 草稿已保留"
@@ -639,8 +679,8 @@ impl Render for Notebook {
             )
             .child(
                 div()
-                    .px_5()
-                    .py_3()
+                    .px_4()
+                    .py_2()
                     .flex()
                     .justify_between()
                     .text_size(px(10.))
@@ -691,14 +731,7 @@ impl Render for Notebook {
                                 .child(self.account.clone()),
                         )
                     })
-                    .child(self.button("refresh", "arrow-repeat", "同步笔记", "refresh", cx))
-                    .child(self.button(
-                        "update",
-                        "arrow-down-circle-fill",
-                        "检查更新",
-                        "update",
-                        cx,
-                    )),
+                    .child(self.button("refresh", "arrow-repeat", "同步笔记 ⌘S", "save", cx)),
             )
             .child(self.workspace_bar(active, muted, cx));
         let view = self.active_view().cloned();

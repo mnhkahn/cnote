@@ -26,6 +26,7 @@ pub enum Job {
     Logout,
     List,
     Get(Note),
+    Prefetch(Note),
     Put(Note),
     Delete(Note),
 }
@@ -280,34 +281,8 @@ impl Cloud {
         Ok(items)
     }
     fn download(&mut self, id: &str) -> Result<(String, String)> {
-        let path = format!("/me/drive/items/{}", segment(id));
-        // Validate the metadata around the content read: never pair one revision's body with another's ETag.
-        for _ in 0..3 {
-            let a: Item = checked(self.request(reqwest::Method::GET, &path)?.send()?)?.json()?;
-            let response = checked(
-                self.request(reqwest::Method::GET, &format!("{path}/content"))?
-                    .send()?,
-            )?;
-            if response
-                .content_length()
-                .is_some_and(|n| n > 20 * 1024 * 1024)
-            {
-                bail!("云端笔记超过 20 MB");
-            }
-            use std::io::Read;
-            let mut bytes = Vec::new();
-            response
-                .take(20 * 1024 * 1024 + 1)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > 20 * 1024 * 1024 {
-                bail!("云端笔记超过 20 MB");
-            }
-            let b: Item = checked(self.request(reqwest::Method::GET, &path)?.send()?)?.json()?;
-            if a.etag == b.etag && !b.etag.is_empty() {
-                return Ok((String::from_utf8(bytes)?, b.etag));
-            }
-        }
-        bail!("笔记正在其他设备上修改，请稍后重试")
+        let token = self.token()?;
+        download_with_token(&self.client, &token, id, Duration::from_secs(25))
     }
     fn put(&mut self, n: Note) -> Result<Reply> {
         let r = if let Some(id) = &n.remote_id {
@@ -428,9 +403,42 @@ impl Cloud {
                 }
                 Ok(Reply::Deleted(n))
             }
-            Job::Login => unreachable!(),
+            Job::Login | Job::Prefetch(_) => unreachable!(),
         }
     }
+}
+fn download_with_token(
+    client: &Client,
+    token: &str,
+    id: &str,
+    timeout: Duration,
+) -> Result<(String, String)> {
+    let path = format!("{GRAPH}/me/drive/items/{}", segment(id));
+    let request = |url: &str| checked(client.get(url).bearer_auth(token).timeout(timeout).send()?);
+    // Keep the metadata/body/metadata ETag check for foreground and background reads.
+    for _ in 0..3 {
+        let before: Item = request(&path)?.json()?;
+        let response = request(&format!("{path}/content"))?;
+        if response
+            .content_length()
+            .is_some_and(|size| size > 20 * 1024 * 1024)
+        {
+            bail!("云端笔记超过 20 MB");
+        }
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        response
+            .take(20 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 20 * 1024 * 1024 {
+            bail!("云端笔记超过 20 MB");
+        }
+        let after: Item = request(&path)?.json()?;
+        if before.etag == after.etag && !after.etag.is_empty() {
+            return Ok((String::from_utf8(bytes)?, after.etag));
+        }
+    }
+    bail!("笔记正在其他设备上修改，请稍后重试")
 }
 fn segment(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes())
@@ -448,7 +456,7 @@ pub fn spawn(
             let client = match Client::builder()
                 .timeout(Duration::from_secs(25))
                 .connect_timeout(Duration::from_secs(10))
-                .user_agent(concat!("CNote/", env!("CARGO_PKG_VERSION")))
+                .user_agent(concat!("CNote/", env!("CNOTE_APP_VERSION")))
                 .build()
             {
                 Ok(c) => c,
@@ -463,12 +471,70 @@ pub fn spawn(
                     return;
                 }
             };
+            let (prefetch_tx, prefetch_rx) =
+                std::sync::mpsc::sync_channel::<(u64, Note, String)>(1);
+            let prefetch_client = client.clone();
+            let prefetch_generation = generation.clone();
+            let replies = tx.clone();
+            std::thread::Builder::new()
+                .name("cnote-prefetch".into())
+                .spawn(move || {
+                    while let Ok((epoch, note, token)) = prefetch_rx.recv() {
+                        if prefetch_generation.load(Ordering::SeqCst) != epoch {
+                            continue;
+                        }
+                        let result = note
+                            .remote_id
+                            .as_deref()
+                            .context("缺少云端笔记 ID")
+                            .and_then(|id| {
+                                download_with_token(
+                                    &prefetch_client,
+                                    &token,
+                                    id,
+                                    Duration::from_secs(8),
+                                )
+                            });
+                        let reply = match result {
+                            Ok((html, etag)) => Reply::Content {
+                                sent: note,
+                                html,
+                                etag,
+                            },
+                            Err(error) => Reply::Failed {
+                                note: Some(note.id),
+                                message: error.to_string(),
+                            },
+                        };
+                        let _ = replies
+                            .send(crate::engine::Command::Prefetched(epoch, Box::new(reply)));
+                    }
+                })
+                .expect("start prefetch worker");
             let mut c = Cloud {
                 client,
                 tokens: None,
             };
             while let Ok((epoch, job)) = rx.recv() {
                 if generation.load(Ordering::SeqCst) != epoch {
+                    continue;
+                }
+                if let Job::Prefetch(note) = job {
+                    let id = note.id.clone();
+                    let result = c.token().and_then(|token| {
+                        prefetch_tx
+                            .try_send((epoch, note, token))
+                            .map_err(|_| anyhow::anyhow!("预取队列忙碌"))
+                    });
+                    if let Err(error) = result {
+                        let _ = tx.send(crate::engine::Command::Prefetched(
+                            epoch,
+                            Box::new(Reply::Failed {
+                                note: Some(id),
+                                message: error.to_string(),
+                            }),
+                        ));
+                    }
                     continue;
                 }
                 let note = match &job {
@@ -484,7 +550,7 @@ pub fn spawn(
                     Job::Login => Operation::Login,
                     Job::Logout => Operation::Logout,
                     Job::List => Operation::List,
-                    Job::Get(_) => Operation::Download,
+                    Job::Get(_) | Job::Prefetch(_) => Operation::Download,
                     Job::Put(_) => Operation::Upload,
                     Job::Delete(_) => Operation::Delete,
                 };

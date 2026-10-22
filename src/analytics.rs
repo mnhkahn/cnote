@@ -82,7 +82,7 @@ pub fn start(directory: PathBuf) {
                 .connect_timeout(Duration::from_secs(1))
                 .timeout(Duration::from_millis(2500))
                 .redirect(reqwest::redirect::Policy::none())
-                .user_agent(concat!("CNote/", env!("CARGO_PKG_VERSION")))
+                .user_agent(concat!("CNote/", env!("CNOTE_APP_VERSION")))
                 .build()
             else {
                 return;
@@ -149,7 +149,7 @@ fn payload(id: &str, events: &[Event]) -> Value {
         .map(|event| {
             let mut props = json!({
                 "distinct_id": id, "app": "cnote", "platform": "macos",
-                "app_version": env!("CARGO_PKG_VERSION"), "os": std::env::consts::OS,
+                "app_version": env!("CNOTE_APP_VERSION"), "os": std::env::consts::OS,
                 "architecture": std::env::consts::ARCH, "$process_person_profile": false
             });
             let name = match event {
@@ -290,6 +290,7 @@ mod tests {
         for event in batch {
             let props = event["properties"].as_object().unwrap();
             assert_eq!(props["app"], "cnote");
+            assert_eq!(props["app_version"], env!("CNOTE_APP_VERSION"));
             assert_eq!(props["distinct_id"], "cnote:test");
             assert_eq!(props["$process_person_profile"], false);
             assert!(props.keys().all(|k| {

@@ -124,6 +124,12 @@ impl Store {
         })?
         .collect::<rusqlite::Result<_>>()?)
     }
+    pub fn first_cached_id(&self, account: &str) -> Result<Option<String>> {
+        Ok(self.0.query_row(
+            "SELECT id FROM notes WHERE deleted=0 AND (account='' OR account=?1) AND (remote_id IS NULL OR etag IS NOT NULL OR dirty=1) ORDER BY modified DESC,id LIMIT 1",
+            [account], |row| row.get(0),
+        ).optional()?)
+    }
     pub fn pending(&self, account: &str) -> Result<Vec<Note>> {
         let mut s = self.0.prepare(
             "SELECT id FROM notes WHERE dirty=1 AND conflict=0 AND (account='' OR account=?1)",
@@ -133,16 +139,48 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         ids.iter().map(|id| self.get(id)).collect()
     }
-    pub fn find_remote(&self, account: &str, remote: &str) -> Result<Option<Note>> {
-        let id: Option<String> = self
+    /// Listing cloud metadata must not copy or rewrite cached document bodies.
+    pub fn update_remote_metadata(
+        &self,
+        account: &str,
+        remote: &str,
+        title: &str,
+        modified: i64,
+    ) -> Result<Option<(String, Option<String>, bool)>> {
+        let cached = self
             .0
             .query_row(
-                "SELECT id FROM notes WHERE account=?1 AND remote_id=?2",
+                "SELECT id,etag,dirty FROM notes WHERE account=?1 AND remote_id=?2",
                 params![account, remote],
-                |r| r.get(0),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, bool>(2)?,
+                    ))
+                },
             )
             .optional()?;
-        id.map(|id| self.get(&id)).transpose()
+        if let Some((id, _, _)) = &cached {
+            self.0.execute(
+                "UPDATE notes SET title=?1,modified=CASE WHEN dirty=0 THEN ?2 ELSE modified END WHERE id=?3",
+                params![title, modified, id],
+            )?;
+        }
+        Ok(cached)
+    }
+    pub fn remote_entries(&self, account: &str) -> Result<Vec<(String, String, bool)>> {
+        let mut query = self.0.prepare(
+            "SELECT id,remote_id,dirty FROM notes WHERE deleted=0 AND account=?1 AND remote_id IS NOT NULL",
+        )?;
+        Ok(query
+            .query_map([account], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+    pub fn mark_conflict(&self, id: &str) -> Result<()> {
+        self.0
+            .execute("UPDATE notes SET conflict=1 WHERE id=?1", [id])?;
+        Ok(())
     }
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self

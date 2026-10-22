@@ -4,6 +4,7 @@ cd "$(dirname "$0")/.."
 sh scripts/prepare-sparkle.sh
 profile="${1:-release}"
 version=$(python3 scripts/bundle-info.py --version "${2:-}")
+export CNOTE_APP_VERSION="$version"
 if [ "$profile" = "release" ]; then
     cargo build --release --locked
 elif [ "$profile" = "debug" ]; then
@@ -12,7 +13,7 @@ else
     echo "Usage: scripts/package.sh [release|debug] [version]" >&2
     exit 1
 fi
-bundle="dist/CNote.app"
+bundle="${CNOTE_BUNDLE_PATH:-dist/CNote.app}"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 # Keep this developer build out of Spotlight; the installed app is the searchable copy.
 printf '' > "$(dirname "$bundle")/.metadata_never_index"

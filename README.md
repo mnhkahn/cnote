@@ -82,6 +82,10 @@ bash scripts/configure-signing.sh
 
 私钥与公钥必须保持配对并跨版本保留。默认更新源是 `mnhkahn/cnote`；构建其他仓库时设置 `CNOTE_UPDATE_REPOSITORY=owner/repo`。首个带更新组件的版本需手动安装，此后跟踪 GitHub 最新正式 Release。发布包目前使用本地 ad-hoc 签名；如需通过 Gatekeeper 无提示分发，需自行配置 Apple Developer ID 签名与公证。
 
+打包时版本号统一取自 tag：Actions 使用触发发布的 tag；本地省略版本时使用当前提交可达的最高稳定版本 tag。没有 tag 时须显式指定，例如 `sh scripts/package.sh debug v0.0.2`。安装包、Sparkle 比较版本、统计和请求 User-Agent 均使用此版本，不再将 Cargo 的 crate 版本当作应用打包版本。CI 会完整拉取 tag。可设置 `CNOTE_BUNDLE_PATH=dist/preview/CNote.app` 将包生成到另一个目录。
+
+早期本机开发包曾误标为 0.1.0，而线上发布从 0.0.x 开始；Sparkle 会按正常版本顺序阻止安装这些较低版本。使用修正版本号的本地构建替换一次后，后续 0.0.x 的递增更新即可正常检查和安装。
+
 ## 验证
 
 编辑器测试保留缓存切换处理 p95 < 16ms 的要求；下一帧测试交错测量空闲帧，以实测空闲帧 p95 的两倍（最低 35ms）为上限，记录两组延迟，避免把共享 CI runner 的整体调度延迟算作编辑器回退。
