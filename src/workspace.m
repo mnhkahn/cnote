@@ -39,6 +39,16 @@ static NSEvent *navigationEvent(NSEvent *event) {
         modifierFlags:event.modifierFlags timestamp:event.timestamp windowNumber:event.windowNumber
         context:nil characters:key charactersIgnoringModifiers:key isARepeat:event.isARepeat keyCode:event.keyCode];
 }
+// Wry's child webview overrides performKeyEquivalent: to always return NO.
+// Give WebKit's implementation the arrow before GPUI's text input machinery.
+static BOOL forwardNavigationKey(NSEvent *event) {
+    if (event.keyCode < 123 || event.keyCode > 126) return NO;
+    WKWebView *view = focusedWebView(event);
+    if (!view) return NO;
+    SEL selector = @selector(performKeyEquivalent:);
+    BOOL (*perform)(id, SEL, NSEvent *) = (void *)[WKWebView instanceMethodForSelector:selector];
+    return perform(view, selector, navigationEvent(event));
+}
 // Native clipboard actions emit the clipboard events used by DOM editors.
 // Selection and history also need the active code editor's own document model.
 static SEL editingSelector(NSEvent *event) {
@@ -78,7 +88,7 @@ int cnote_workspace_install(void (*callback)(unsigned int)) {
                 workspaceCallback((unsigned int)index);
                 return nil; // Consume before WKWebView or a code editor handles Command-number.
             }
-            if (forwardEditingKey(event)) return nil;
+            if (forwardEditingKey(event) || forwardNavigationKey(event)) return nil;
             return focusedWebView(event) ? navigationEvent(event) : event;
         }];
     }
@@ -101,7 +111,6 @@ void cnote_workspace_test_navigation(unsigned int index, int shift) {
     unichar characters[] = {NSLeftArrowFunctionKey, NSRightArrowFunctionKey, NSDownArrowFunctionKey, NSUpArrowFunctionKey};
     unsigned short codes[] = {123,124,125,126};
     NSString *key = [NSString stringWithCharacters:&characters[index] length:1];
-    if (index == 2) key = @"\x1e"; // Reproduce the reported control-character event.
     NSEventModifierFlags flags = NSEventModifierFlagFunction | NSEventModifierFlagNumericPad;
     if (shift) flags |= NSEventModifierFlagShift;
     NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint

@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix='cnote-native-smoke-') as folder:
     env = dict(os.environ, CNOTE_DATA_DIR=folder, CNOTE_SMOKE_TEST='1')
     binary = root / 'target/debug/cnote'
     result = subprocess.run([str(binary)], env=env, capture_output=True, text=True, timeout=60)
-    if result.returncode or 'CNOTE_SMOKE_SAVED' not in result.stderr or 'CNOTE_SMOKE_ICONS_OK' not in result.stderr or 'CNOTE_SMOKE_WORKSPACES_OK' not in result.stderr or 'CNOTE_SMOKE_SHORTCUTS_OK' not in result.stderr or 'CNOTE_SMOKE_NAVIGATION_OK' not in result.stderr:
+    if result.returncode or 'CNOTE_SMOKE_SAVED' not in result.stderr or 'CNOTE_SMOKE_ICONS_OK' not in result.stderr or 'CNOTE_SMOKE_WORKSPACES_OK' not in result.stderr or 'CNOTE_SMOKE_SHORTCUTS_OK' not in result.stderr or 'CNOTE_SMOKE_NAVIGATION_OK' not in result.stderr or 'CNOTE_SMOKE_NOTE_NAVIGATION_OK' not in result.stderr:
         raise SystemExit(f'Native smoke test failed ({result.returncode}):\n{result.stderr}')
     with sqlite3.connect(pathlib.Path(folder) / 'notes.db') as connection:
         rows = connection.execute('select title,html,dirty from notes').fetchall()

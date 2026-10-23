@@ -32,6 +32,15 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
     await page.keyboard.press('Meta+Shift+2');
     assert.equal(await page.evaluate(()=>messages.filter(m=>m.type==='workspace').length),count);
    });
+   await t.test('arrow characters cannot be inserted as note text',async()=>{
+    const original=await page.locator('#editor').innerHTML();
+    await page.locator('#editor').focus();
+    for(const key of ['ArrowDown','ArrowUp','ArrowLeft','ArrowRight','Shift+ArrowRight'])await page.keyboard.press(key);
+    for(const character of ['\u001c','\u001d','\u001e','\u001f','\uf700','\uf701','\uf702','\uf703'])await page.keyboard.insertText(character);
+    assert.equal(await page.locator('#editor').innerHTML(),original);
+    assert.equal(await page.locator('#editor').evaluate(el=>el.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertText',data:'正常文字',bubbles:true,cancelable:true}))),true);
+    assert.equal(await page.locator('#editor').evaluate(el=>el.dispatchEvent(new InputEvent('beforeinput',{inputType:'insertFromPaste',data:'\uf701',bubbles:true,cancelable:true}))),true);
+   });
    await t.test('rich HTML sanitized without losing table and tasks',async()=>{
     const safe=await page.evaluate(()=>cnote.sanitize('<script>window.pwned=1</script><img src="x" onerror="window.pwned=1"><a href="javascript:alert(1)">bad</a><table><tr><td>cell</td></tr></table><input type="checkbox" checked><iframe src="https://evil.test"></iframe>'));
     assert(!safe.includes('onerror'));assert(!safe.includes('javascript:'));assert(!safe.includes('<script'));assert(!safe.includes('<iframe'));assert(safe.includes('<td>cell</td>'));assert(safe.includes('checked'));

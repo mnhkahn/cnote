@@ -44,6 +44,15 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' lo
    await page.waitForFunction(()=>cnoteTools.state.text==='没有缩进也能手动合并');
    await page.locator('#text-mode').selectOption('auto');
   });
+  await t.test('arrow characters cannot be inserted into Ace or tool inputs',async()=>{
+   await page.evaluate(()=>ace.edit('tool-text-editor').focus());
+   const original=await page.evaluate(()=>cnoteTools.state.text);
+   for(const character of ['\u001e','\uf701'])await page.keyboard.insertText(character);
+   assert.equal(await page.evaluate(()=>cnoteTools.state.text),original);
+   await page.locator('#text-pattern').fill('pattern');
+   for(const character of ['\u001e','\uf701'])await page.keyboard.insertText(character);
+   assert.equal(await page.locator('#text-pattern').inputValue(),'pattern');
+  });
   await t.test('an asynchronous transform cannot overwrite newer typing',async()=>{
    await page.evaluate(()=>{window.originalWorkerPost=Worker.prototype.postMessage;Worker.prototype.postMessage=function(...args){if(args[0].task==='textOp')setTimeout(()=>originalWorkerPost.apply(this,args),150);else originalWorkerPost.apply(this,args);};ace.edit('tool-text-editor').setValue('{"old":1}',-1);});
    await page.getByRole('button',{name:'格式化',exact:true}).click();

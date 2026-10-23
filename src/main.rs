@@ -64,6 +64,7 @@ fn run() -> anyhow::Result<()> {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some("CNote".into()),
+                    appears_transparent: true,
                     ..Default::default()
                 }),
                 window_min_size: Some(size(px(760.), px(520.))),

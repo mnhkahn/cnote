@@ -23,8 +23,8 @@ pub struct Notebook {
     selected: Option<String>,
     account: String,
     authenticated: bool,
-    status: String,
     sidebar: bool,
+    context_menu: Option<(String, Point<Pixels>)>,
     workspace: Workspace,
     note_dirty: bool,
     tool_dirty: bool,
@@ -106,6 +106,9 @@ impl Notebook {
             Ok(v) => (Some(Rc::new(v)), None),
             Err(e) => (None, Some(format!("富文本编辑器无法启动：{e}"))),
         };
+        if let Some(error) = error {
+            eprintln!("CNote editor: {error}");
+        }
         let write_tx = handle.tx.clone();
         cx.spawn(async move |this, cx| {
             while let Ok(message) = ipc_rx.recv().await {
@@ -172,8 +175,8 @@ impl Notebook {
             selected: None,
             account: String::new(),
             authenticated: false,
-            status: error.unwrap_or_else(|| "正在加载本地笔记…".into()),
             sidebar: true,
+            context_menu: None,
             workspace: Workspace::Notes,
             note_dirty: false,
             tool_dirty: false,
@@ -205,6 +208,7 @@ impl Notebook {
             return;
         }
         self.workspace = page;
+        self.context_menu = None;
         self.js(&format!(
             "window.cnoteTools&&cnoteTools.show({})",
             page.index()
@@ -268,15 +272,13 @@ impl Notebook {
                     .spawn(async move { serde_json::to_string(&event) })
                     .await;
                 if let Ok(serialized) = serialized {
-                    let _ = this.update_in(cx, |this, window, cx| {
+                    let _ = this.update(cx, |this, _| {
                         if this.cache_generation == generation {
                             this.js(&format!("window.cnote&&cnote.receive({serialized})"));
                             if smoke_load {
-                                // Edit only after the asynchronous load has reached WebKit.
-                                this.js("document.getElementById('editor').innerHTML='<p>Native WebKit → IPC → SQLite ✓</p>';document.getElementById('editor').dispatchEvent(new Event('input',{bubbles:true}))");
-                                this.switch_workspace(Workspace::Csv, window, cx);
-                                // Quit from a tool: hidden notes must still flush.
-                                this.js("cnote.action('close')");
+                                this.js("const editor=document.getElementById('editor');editor.innerHTML='<p>first</p><p>second</p><p>third</p>';editor.focus();const range=document.createRange();range.setStart(editor.firstChild.firstChild,0);range.collapse(true);getSelection().removeAllRanges();getSelection().addRange(range)");
+                                workspace::test_navigation(2, false);
+                                this.js("setTimeout(()=>{window.ipc.postMessage(JSON.stringify({type:'native_note_navigation_smoke',html:document.getElementById('editor').innerHTML,anchor:getSelection().anchorNode?.textContent}));},200)");
                             }
                         }
                     });
@@ -296,6 +298,17 @@ impl Notebook {
     }
     fn ipc(&mut self, v: Value, window: &mut Window, cx: &mut Context<Self>) {
         match v["type"].as_str().unwrap_or_default() {
+            "native_note_navigation_smoke" if smoke() => {
+                if v["html"] != "<p>first</p><p>second</p><p>third</p>" || v["anchor"] != "second" {
+                    eprintln!("CNOTE_SMOKE_NOTE_NAVIGATION_FAILED: {v}");
+                    cx.quit();
+                    return;
+                }
+                eprintln!("CNOTE_SMOKE_NOTE_NAVIGATION_OK");
+                self.js("document.getElementById('editor').innerHTML='<p>Native WebKit → IPC → SQLite ✓</p>';document.getElementById('editor').dispatchEvent(new Event('input',{bubbles:true}))");
+                self.switch_workspace(Workspace::Csv, window, cx);
+                self.js("cnote.action('close')");
+            }
             "native_tool_smoke" if smoke() => {
                 if let Some(error) = v["error"].as_str() {
                     eprintln!("CNOTE_SMOKE_TOOL_FAILED: {error}");
@@ -383,8 +396,10 @@ impl Notebook {
                 if let Some(view) = &self.view
                     && let Err(e) = view.print()
                 {
-                    self.status = format!("无法打开打印窗口：{e}");
-                    cx.notify();
+                    self.js(&format!(
+                        "window.cnote&&cnote.receive({})",
+                        json!({"type":"error","message":format!("无法打开打印窗口：{e}")})
+                    ));
                 }
             }
             "export" => self.export(v, cx),
@@ -410,7 +425,7 @@ impl Notebook {
                     let document=format!("<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><body>{html}</body></html>");
                     std::fs::write(&path,document)
                 }).await;
-                let _=this.update(cx,|this,cx|{this.status=match result{Ok(())=>"HTML 已导出".into(),Err(e)=>format!("导出失败：{e}")};cx.notify();});
+                let _=this.update(cx,|this,_|{let status=match result{Ok(())=>"HTML 已导出".into(),Err(e)=>format!("导出失败：{e}")};this.js(&format!("window.cnote&&cnote.receive({})",json!({"type":"state","status":status})));});
             }
         }).detach();
     }
@@ -461,7 +476,6 @@ impl Notebook {
                 selected,
                 account,
                 authenticated,
-                status,
                 intent,
                 ..
             } => {
@@ -471,7 +485,6 @@ impl Notebook {
                 self.selected = selected.clone();
                 self.account = account.clone();
                 self.authenticated = *authenticated;
-                self.status = status.clone();
             }
             Event::Selected { id, intent } => {
                 self.intent = self.intent.max(*intent);
@@ -485,15 +498,8 @@ impl Notebook {
                     Rc::make_mut(&mut self.notes)[index].dirty = true;
                     redraw = true;
                 }
-                if self.status != "已保存到本机" {
-                    self.status = "已保存到本机".into();
-                    redraw = true;
-                }
             }
-            Event::Error { message } | Event::SaveFailed { message, .. } => {
-                self.status = message.clone();
-                redraw = true;
-            }
+            Event::Error { .. } | Event::SaveFailed { .. } => {}
             Event::Closed => {
                 if smoke() {
                     eprintln!("CNOTE_SMOKE_SAVED");
@@ -549,8 +555,10 @@ impl Notebook {
                 }
                 "update" => {
                     if let Err(e) = updater::check() {
-                        this.status = e;
-                        cx.notify();
+                        this.js(&format!(
+                            "window.cnote&&cnote.receive({})",
+                            json!({"type":"error","message":e})
+                        ));
                     }
                 }
                 _ => this.action(&kind, json!({})),
@@ -578,6 +586,8 @@ impl Render for Notebook {
                     let id = n.id.clone();
                     let chosen = selected.as_deref() == Some(id.as_str());
                     let weak = weak.clone();
+                    let menu_id = id.clone();
+                    let menu_weak = weak.clone();
                     div()
                         .id(SharedString::from(id.clone()))
                         .h(px(44.))
@@ -585,10 +595,8 @@ impl Render for Notebook {
                         .flex_col()
                         .justify_center()
                         .gap(px(2.))
-                        .px_2()
+                        .px_4()
                         .py_1()
-                        .mx_2()
-                        .rounded_md()
                         .cursor_pointer()
                         .bg(if chosen { rgb(active) } else { rgb(sidebar) })
                         .hover(|d| d.bg(rgb(active)))
@@ -647,6 +655,12 @@ impl Render for Notebook {
                                 this.action("open", json!({"id":id}));
                             });
                         })
+                        .on_mouse_down(MouseButton::Right, move |event, _, cx| {
+                            let _ = menu_weak.update(cx, |this, cx| {
+                                this.context_menu = Some((menu_id.clone(), event.position));
+                                cx.notify();
+                            });
+                        })
                 })
                 .collect::<Vec<_>>()
         })
@@ -664,7 +678,7 @@ impl Render for Notebook {
             .child(
                 div()
                     .px_5()
-                    .pt_6()
+                    .pt(px(34.))
                     .pb_4()
                     .flex()
                     .items_center()
@@ -749,9 +763,6 @@ impl Render for Notebook {
                         .child(self.button("refresh", "arrow-repeat", "同步笔记 ⌘S", "save", cx)),
                 )
             })
-            .when(self.workspace != Workspace::Notes, |d| {
-                d.child(div().flex_1())
-            })
             .child(self.workspace_bar(active, muted, cx));
         let view = self.active_view().cloned();
         let last = self.web_bounds.clone();
@@ -782,7 +793,65 @@ impl Render for Notebook {
             .bg(rgb(bg))
             .text_color(rgb(ink))
             .font_family(".AppleSystemUIFont")
-            .when(self.sidebar, |d| d.child(sidebar_view))
+            .when(self.sidebar && self.workspace == Workspace::Notes, |d| {
+                d.child(sidebar_view)
+            })
+            .when_some(
+                self.context_menu.clone(),
+                |d, (_, position)| {
+                    d.child(
+                        div()
+                            .id("note-menu")
+                            .absolute()
+                            .left(position.x)
+                            .top(position.y)
+                            .w(px(132.))
+                            .p_1()
+                            .flex()
+                            .flex_col()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(line))
+                            .bg(rgb(bg))
+                            .shadow_lg()
+                            .text_size(px(12.))
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                this.context_menu = None;
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .id("note-menu-delete")
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_sm()
+                                    .hover(|d| d.bg(rgb(active)))
+                                    .child(
+                                        div()
+                                            .font_family("bootstrap-icons")
+                                            .child(icons::glyph("trash3")),
+                                    )
+                                    .child("删除笔记")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if let Some((id, _)) = this.context_menu.take() {
+                                            if let Some(n) = this.notes.iter().find(|n| n.id == id)
+                                            {
+                                                this.action(
+                                                    "delete",
+                                                    json!({"id":id,"title":n.title}),
+                                                );
+                                            }
+                                            cx.notify();
+                                        }
+                                    })),
+                            ),
+                    )
+                },
+            )
             .child(
                 div()
                     .flex_1()
@@ -802,52 +871,8 @@ impl Render for Notebook {
                             .border_color(rgb(line))
                             .text_size(px(11.))
                             .text_color(rgb(muted))
-                            .child(self.button("sidebar", "layout-sidebar", "", "sidebar", cx))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(if self.workspace == Workspace::Notes {
-                                        self.status.clone()
-                                    } else {
-                                        format!("{} · 本地工具", self.workspace.label())
-                                    }),
-                            )
                             .when(self.workspace == Workspace::Notes, |d| {
-                                d.child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .child(self.button(
-                                            "focus",
-                                            "arrows-fullscreen",
-                                            "专注",
-                                            "focus",
-                                            cx,
-                                        ))
-                                        .child(
-                                            div()
-                                                .id("delete")
-                                                .cursor_pointer()
-                                                .px_3()
-                                                .py_2()
-                                                .font_family("bootstrap-icons")
-                                                .child(icons::glyph("trash3"))
-                                                .on_click(cx.listener(|this, _, _, _| {
-                                                    if let Some(id) = &this.selected
-                                                        && let Some(n) =
-                                                            this.notes.iter().find(|n| &n.id == id)
-                                                    {
-                                                        this.action(
-                                                            "delete",
-                                                            json!({"id":id,"title":n.title}),
-                                                        );
-                                                    }
-                                                })),
-                                        ),
-                                )
+                                d.child(self.button("sidebar", "layout-sidebar", "", "sidebar", cx))
                             }),
                     )
                     .child(div().flex_1().min_h_0().child(editor)),
