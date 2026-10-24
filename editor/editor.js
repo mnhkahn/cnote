@@ -214,6 +214,7 @@
  }
  function receive(e){
   switch(e.type){
+   case 'theme':window.cnoteTheme.set(e.theme);break;
    case 'cache_reset':resetCache(e.generation,e.account);break;
    case 'preload':preload(e);break;
    case 'tool_state':case 'tool_saved':case 'tool_save_failed':window.cnoteTools?.receive(e);break;

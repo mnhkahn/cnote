@@ -1,3 +1,12 @@
+// Keep embedded editors in sync with the application's theme preference.
+(() => {
+ const system = matchMedia('(prefers-color-scheme: dark)');
+ let preference = 'system';
+ const apply = () => document.documentElement.dataset.theme = preference === 'system' ? (system.matches ? 'dark' : 'light') : preference;
+ window.cnoteTheme = {set(value) {if (!['system','light','dark'].includes(value)) return; preference = value; apply();}};
+ system.addEventListener('change', () => {if (preference === 'system') apply();});
+ apply();
+})();
 // Capture before tool editors handle shortcuts, including inside text inputs.
 (() => {
  // Navigation function keys are commands, even if a native input method sends

@@ -2,6 +2,7 @@ use crate::{
     engine::{Command, Event, Handle},
     icons,
     store::Summary,
+    theme::Theme,
     updater,
     workspace::{self, Workspace},
 };
@@ -24,6 +25,7 @@ pub struct Notebook {
     account: String,
     authenticated: bool,
     sidebar: bool,
+    theme: Theme,
     context_menu: Option<(String, Point<Pixels>)>,
     workspace: Workspace,
     note_dirty: bool,
@@ -62,6 +64,7 @@ impl Notebook {
                             } else {
                                 eprintln!("CNOTE_SMOKE_SHORTCUTS_OK");
                                 eprintln!("CNOTE_SMOKE_WORKSPACES_OK");
+                                workspace::test_more_menu();
                                 let _ = this.tx.send(Command::Web(
                                     json!({"type":"new","title":"Native smoke test"}),
                                 ));
@@ -165,6 +168,7 @@ impl Notebook {
                 this.action("refresh", json!({}));
             }
         });
+        let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
         Self {
             intent: 0,
             cache_generation: 0,
@@ -176,6 +180,7 @@ impl Notebook {
             account: String::new(),
             authenticated: false,
             sidebar: true,
+            theme: Theme::System,
             context_menu: None,
             workspace: Workspace::Notes,
             note_dirty: false,
@@ -187,8 +192,23 @@ impl Notebook {
             quitting: false,
             close_tx,
             close_rx,
-            _subscriptions: vec![quit, activation],
+            _subscriptions: vec![quit, activation, appearance],
         }
+    }
+    fn apply_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.set_window_appearance(theme.appearance());
+        crate::menus::set_menus(cx, theme);
+        if self.ready {
+            self.js(&format!("cnoteTheme.set({})", json!(theme.as_str())));
+        }
+        cx.notify();
+    }
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.apply_theme(theme, cx);
+        let _ = self
+            .tx
+            .send(Command::Web(json!({"type":"theme","value":theme.as_str()})));
     }
     fn active_view(&self) -> Option<&Rc<wry::WebView>> {
         self.view.as_ref()
@@ -219,37 +239,43 @@ impl Notebook {
         let _ = window;
         cx.notify();
     }
-    fn workspace_bar(&self, active: u32, muted: u32, cx: &Context<Self>) -> impl IntoElement {
+    fn workspace_bar(&self, dark: bool, muted: u32, cx: &Context<Self>) -> impl IntoElement {
+        let tray = if dark { 0x101520 } else { 0xe9edf3 };
+        let selected_bg = if dark { 0x30394a } else { 0xffffff };
         div()
             .flex()
             .gap_1()
-            .p_2()
+            .p_1()
+            .rounded_lg()
+            .bg(rgb(tray))
             .children(Workspace::ALL.into_iter().map(|page| {
                 let selected = self.workspace == page;
                 div()
                     .id(("workspace", page.index()))
-                    .flex_1()
                     .flex()
-                    .flex_col()
                     .items_center()
-                    .gap_1()
-                    .py_2()
+                    .gap_2()
+                    .px_3()
+                    .h(px(30.))
                     .rounded_md()
                     .cursor_pointer()
                     .text_color(rgb(if selected { 0x0d6efd } else { muted }))
-                    .when(selected, |d| d.bg(rgb(active)))
-                    .hover(|d| d.bg(rgb(active)))
+                    .when(selected, |d| d.bg(rgb(selected_bg)).shadow_sm())
+                    .hover(|d| d.bg(rgb(selected_bg)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
                         div()
                             .font_family("bootstrap-icons")
-                            .text_size(px(16.))
+                            .text_size(px(14.))
                             .child(icons::glyph(page.icon())),
                     )
-                    .child(div().text_size(px(10.)).child(format!(
-                        "{} ⌘{}",
-                        page.label(),
-                        page.index() + 1
-                    )))
+                    .child(div().text_size(px(12.)).child(page.label()))
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(muted))
+                            .child(format!("⌘{}", page.index() + 1)),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.switch_workspace(page, window, cx)
                     }))
@@ -296,6 +322,17 @@ impl Notebook {
             data
         ));
     }
+    fn verify_smoke_layout(&self) {
+        let (x, y, width, height) = self.web_bounds.get().expect("editor layout");
+        let expected_x = if self.workspace == Workspace::Notes && self.sidebar {
+            270.
+        } else {
+            0.
+        };
+        assert_eq!(x, expected_x, "sidebar only occupies space in Notes");
+        assert_eq!(y, 56., "all workspaces start below the shared titlebar");
+        assert!(width > 400. && height > 400., "usable editor dimensions");
+    }
     fn ipc(&mut self, v: Value, window: &mut Window, cx: &mut Context<Self>) {
         match v["type"].as_str().unwrap_or_default() {
             "native_note_navigation_smoke" if smoke() => {
@@ -304,12 +341,20 @@ impl Notebook {
                     cx.quit();
                     return;
                 }
+                self.verify_smoke_layout();
+                assert_eq!(
+                    self.theme,
+                    Theme::Dark,
+                    "More menu must dispatch its theme action"
+                );
+                eprintln!("CNOTE_SMOKE_TITLEBAR_OK");
                 eprintln!("CNOTE_SMOKE_NOTE_NAVIGATION_OK");
                 self.js("document.getElementById('editor').innerHTML='<p>Native WebKit → IPC → SQLite ✓</p>';document.getElementById('editor').dispatchEvent(new Event('input',{bubbles:true}))");
                 self.switch_workspace(Workspace::Csv, window, cx);
                 self.js("cnote.action('close')");
             }
             "native_tool_smoke" if smoke() => {
+                self.verify_smoke_layout();
                 if let Some(error) = v["error"].as_str() {
                     eprintln!("CNOTE_SMOKE_TOOL_FAILED: {error}");
                     cx.quit();
@@ -471,6 +516,7 @@ impl Notebook {
         }
         let mut redraw = false;
         match &event {
+            Event::Theme { theme } => self.apply_theme(*theme, cx),
             Event::State {
                 notes,
                 selected,
@@ -493,9 +539,16 @@ impl Notebook {
                     redraw = true;
                 }
             }
-            Event::Saved { id, .. } => {
-                if let Some(index) = self.notes.iter().position(|n| &n.id == id && !n.dirty) {
-                    Rc::make_mut(&mut self.notes)[index].dirty = true;
+            Event::Saved { id, title, .. } | Event::Title { id, title } => {
+                let saved = matches!(&event, Event::Saved { .. });
+                if let Some(index) = self
+                    .notes
+                    .iter()
+                    .position(|n| &n.id == id && ((saved && !n.dirty) || &n.title != title))
+                {
+                    let note = &mut Rc::make_mut(&mut self.notes)[index];
+                    note.dirty |= saved;
+                    note.title = title.clone();
                     redraw = true;
                 }
             }
@@ -567,10 +620,7 @@ impl Notebook {
 }
 impl Render for Notebook {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let dark = matches!(
-            window.appearance(),
-            WindowAppearance::Dark | WindowAppearance::VibrantDark
-        );
+        let dark = self.theme.is_dark(window.appearance());
         let (bg, sidebar, ink, muted, line, active) = if dark {
             (0x191e29, 0x151a24, 0xdfe7f3, 0x8390a4, 0x2b3240, 0x233c63)
         } else {
@@ -590,6 +640,8 @@ impl Render for Notebook {
                     let menu_weak = weak.clone();
                     div()
                         .id(SharedString::from(id.clone()))
+                        .w_full()
+                        .min_w_0()
                         .h(px(44.))
                         .flex()
                         .flex_col()
@@ -602,6 +654,8 @@ impl Render for Notebook {
                         .hover(|d| d.bg(rgb(active)))
                         .child(
                             div()
+                                .w_full()
+                                .min_w_0()
                                 .flex()
                                 .items_center()
                                 .gap(px(6.))
@@ -616,6 +670,7 @@ impl Render for Notebook {
                                 .child(
                                     div()
                                         .flex_1()
+                                        .min_w_0()
                                         .overflow_hidden()
                                         .text_ellipsis()
                                         .text_size(px(13.))
@@ -664,6 +719,7 @@ impl Render for Notebook {
                 })
                 .collect::<Vec<_>>()
         })
+        .w_full()
         .flex_1()
         .min_h_0();
         let sidebar_view = div()
@@ -678,7 +734,7 @@ impl Render for Notebook {
             .child(
                 div()
                     .px_5()
-                    .pt(px(34.))
+                    .pt_4()
                     .pb_4()
                     .flex()
                     .items_center()
@@ -762,8 +818,7 @@ impl Render for Notebook {
                         })
                         .child(self.button("refresh", "arrow-repeat", "同步笔记 ⌘S", "save", cx)),
                 )
-            })
-            .child(self.workspace_bar(active, muted, cx));
+            });
         let view = self.active_view().cloned();
         let last = self.web_bounds.clone();
         let editor = canvas(
@@ -790,92 +845,127 @@ impl Render for Notebook {
         div()
             .size_full()
             .flex()
+            .flex_col()
+            .relative()
             .bg(rgb(bg))
             .text_color(rgb(ink))
             .font_family(".AppleSystemUIFont")
-            .when(self.sidebar && self.workspace == Workspace::Notes, |d| {
-                d.child(sidebar_view)
-            })
-            .when_some(
-                self.context_menu.clone(),
-                |d, (_, position)| {
-                    d.child(
-                        div()
-                            .id("note-menu")
-                            .absolute()
-                            .left(position.x)
-                            .top(position.y)
-                            .w(px(132.))
-                            .p_1()
-                            .flex()
-                            .flex_col()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(rgb(line))
-                            .bg(rgb(bg))
-                            .shadow_lg()
-                            .text_size(px(12.))
-                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                                this.context_menu = None;
-                                cx.notify();
-                            }))
-                            .child(
+            .child(
+                div()
+                    .id("titlebar")
+                    .h(px(56.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_3()
+                    .bg(rgb(sidebar))
+                    .border_b_1()
+                    .border_color(rgb(line))
+                    .on_mouse_down(MouseButton::Left, |event, window, _| {
+                        if event.click_count == 2 {
+                            window.zoom_window();
+                        } else {
+                            window.start_window_move();
+                        }
+                    })
+                    .child(div().w(px(140.)).flex_none().pl(px(76.)).when(
+                        self.workspace == Workspace::Notes,
+                        |d| {
+                            d.child(
                                 div()
-                                    .id("note-menu-delete")
-                                    .cursor_pointer()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_3()
-                                    .py_2()
-                                    .rounded_sm()
-                                    .hover(|d| d.bg(rgb(active)))
-                                    .child(
-                                        div()
-                                            .font_family("bootstrap-icons")
-                                            .child(icons::glyph("trash3")),
-                                    )
-                                    .child("删除笔记")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        if let Some((id, _)) = this.context_menu.take() {
-                                            if let Some(n) = this.notes.iter().find(|n| n.id == id)
-                                            {
-                                                this.action(
-                                                    "delete",
-                                                    json!({"id":id,"title":n.title}),
-                                                );
-                                            }
-                                            cx.notify();
-                                        }
-                                    })),
-                            ),
-                    )
-                },
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .child(self.button(
+                                        "sidebar",
+                                        "layout-sidebar",
+                                        "",
+                                        "sidebar",
+                                        cx,
+                                    )),
+                            )
+                        },
+                    ))
+                    .child(self.workspace_bar(dark, muted, cx))
+                    .child(
+                        div().w(px(140.)).flex_none().flex().justify_end().child(
+                            div()
+                                .id("workspace-more")
+                                .w(px(36.))
+                                .h(px(32.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .text_size(px(24.))
+                                .text_color(rgb(muted))
+                                .hover(|d| d.bg(rgb(active)))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .child("⋯")
+                                .on_click(|_, _, _| workspace::show_more_menu()),
+                        ),
+                    ),
             )
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
-                    .h_full()
+                    .min_h_0()
                     .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .h(px(44.))
-                            .flex_none()
-                            .px_3()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .border_b_1()
-                            .border_color(rgb(line))
-                            .text_size(px(11.))
-                            .text_color(rgb(muted))
-                            .when(self.workspace == Workspace::Notes, |d| {
-                                d.child(self.button("sidebar", "layout-sidebar", "", "sidebar", cx))
-                            }),
-                    )
-                    .child(div().flex_1().min_h_0().child(editor)),
+                    .when(self.sidebar && self.workspace == Workspace::Notes, |d| {
+                        d.child(sidebar_view)
+                    })
+                    .child(div().flex_1().min_w_0().h_full().child(editor)),
             )
+            .when_some(self.context_menu.clone(), |d, (_, position)| {
+                d.child(
+                    div()
+                        .id("note-menu")
+                        .absolute()
+                        .left(position.x)
+                        .top(position.y)
+                        .w(px(132.))
+                        .p_1()
+                        .flex()
+                        .flex_col()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(line))
+                        .bg(rgb(bg))
+                        .shadow_lg()
+                        .text_size(px(12.))
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.context_menu = None;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .id("note-menu-delete")
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .px_3()
+                                .py_2()
+                                .rounded_sm()
+                                .hover(|d| d.bg(rgb(active)))
+                                .child(
+                                    div()
+                                        .font_family("bootstrap-icons")
+                                        .child(icons::glyph("trash3")),
+                                )
+                                .child("删除笔记")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some((id, _)) = this.context_menu.take() {
+                                        if let Some(n) = this.notes.iter().find(|n| n.id == id) {
+                                            this.action("delete", json!({"id":id,"title":n.title}));
+                                        }
+                                        cx.notify();
+                                    }
+                                })),
+                        ),
+                )
+            })
     }
 }

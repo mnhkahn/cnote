@@ -897,6 +897,7 @@ dependencies = [
  "directories",
  "gpui-pre",
  "gpui-pre-platform",
+ "html5ever",
  "keyring",
  "lb-wry",
  "reqwest",

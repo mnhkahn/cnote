@@ -9,3 +9,9 @@
 /node_modules/
 __pycache__/
 *.py[cod]
+
+# Private signing identities must stay outside Git.
+*.p12
+*.pfx
+*.keychain
+*.keychain-db

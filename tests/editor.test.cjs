@@ -20,6 +20,19 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
     await receive({type:'load',id:'a',title:'<script>unsafe</script>',html:'<p>Hello</p>'});
     assert.equal(await page.locator('#title').textContent(),'<script>unsafe</script>');assert.equal(await page.locator('#title script').count(),0);
    });
+   await t.test('theme overrides system appearance and can resume following it',async()=>{
+    await page.emulateMedia({colorScheme:'light'});
+    await receive({type:'theme',theme:'dark'});
+    assert.equal(await page.locator('body').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(25, 30, 41)');
+    assert.equal(await page.locator('#save').evaluate(el=>getComputedStyle(el).color),'rgb(255, 255, 255)');
+    await page.emulateMedia({colorScheme:'dark'});
+    await receive({type:'theme',theme:'light'});
+    assert.equal(await page.locator('body').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(255, 255, 255)');
+    await receive({type:'theme',theme:'system'});
+    await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
+    await page.emulateMedia({colorScheme:'light'});
+    await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');
+   });
    await t.test('Command 1–4 switches workspaces while editing without mutating drafts',async()=>{
     const editor=page.locator('#editor');await editor.click();
     const before=await editor.innerHTML();

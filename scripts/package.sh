@@ -1,8 +1,13 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-sh scripts/prepare-sparkle.sh
 profile="${1:-release}"
+if [ "$profile" = "release" ] && [ "${CNOTE_ALLOW_ADHOC:-}" = "1" ]; then
+    echo "Release packages require the fixed signing identity; ad-hoc signing is development-only." >&2
+    exit 1
+fi
+python3 scripts/code-signing.py check
+sh scripts/prepare-sparkle.sh
 version=$(python3 scripts/bundle-info.py --version "${2:-}")
 export CNOTE_APP_VERSION="$version"
 if [ "$profile" = "release" ]; then
@@ -33,6 +38,5 @@ ditto target/sparkle-sdk/Sparkle.framework "$bundle/Contents/Frameworks/Sparkle.
 cp target/sparkle-sdk/LICENSE "$bundle/Contents/Resources/Sparkle-LICENSE.txt"
 cp LICENSE THIRD_PARTY_NOTICES.md assets/Bootstrap-Icons-LICENSE.txt "$bundle/Contents/Resources/"
 cp tools/vendor/LICENSES.txt "$bundle/Contents/Resources/Offline-Tools-LICENSES.txt"
-codesign --force --deep --sign - "$bundle"
-codesign --verify --deep --strict "$bundle"
+python3 scripts/code-signing.py sign "$bundle"
 echo "Built $bundle ($version)"

@@ -20,6 +20,16 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' lo
    assert((await page.locator('#tool-text-editor .ace_text-layer').textContent()).includes('9007199254740993123'));
    await page.screenshot({path:path.join('/tmp','cnote-local-text-'+name+'.png')});
   });
+  await t.test('tool editors switch theme without changing drafts',async()=>{
+   const original=await page.evaluate(()=>cnoteTools.state.text);
+   await page.evaluate(()=>cnoteTheme.set('dark'));
+   assert.equal(await page.locator('#local-tools').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(25, 30, 41)');
+   assert.equal(await page.locator('#tool-text-editor').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(25, 30, 41)');
+   await page.evaluate(()=>cnoteTheme.set('light'));
+   assert.equal(await page.locator('#tool-text-editor').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(255, 255, 255)');
+   assert.equal(await page.evaluate(()=>cnoteTools.state.text),original);
+   await page.evaluate(()=>cnoteTheme.set('system'));
+  });
   await t.test('editing menu targets the focused input instead of the text editor',async()=>{
    await page.locator('#text-pattern').fill('pattern');
    await page.evaluate(()=>cnoteTools.edit('selectAll'));

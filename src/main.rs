@@ -4,7 +4,9 @@ mod cloud;
 mod engine;
 mod icons;
 mod menus;
+mod note_title;
 mod store;
+mod theme;
 mod ui;
 mod updater;
 mod workspace;
@@ -65,7 +67,7 @@ fn run() -> anyhow::Result<()> {
                 titlebar: Some(TitlebarOptions {
                     title: Some("CNote".into()),
                     appears_transparent: true,
-                    ..Default::default()
+                    traffic_light_position: Some(gpui::point(px(16.), px(20.))),
                 }),
                 window_min_size: Some(size(px(760.), px(520.))),
                 ..Default::default()

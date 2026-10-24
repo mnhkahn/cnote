@@ -22,6 +22,7 @@ keyring = { version = "3", features = ["apple-native"] }
 uuid = { version = "1", features = ["v4"] }
 directories = "6"
 url = "2"
+html5ever = "0.29.1"
 
 [build-dependencies]
 cc = "1"

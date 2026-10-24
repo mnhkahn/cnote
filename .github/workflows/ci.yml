@@ -35,6 +35,8 @@ jobs:
       - run: npx playwright install chromium webkit
       - run: npm test
       - name: Build app bundle
+        env:
+          CNOTE_ALLOW_ADHOC: '1'
         run: sh scripts/package.sh debug
       - name: Native GPUI and WebKit smoke test
         if: ${{ vars.CNOTE_NATIVE_UI_TESTS == 'true' }}

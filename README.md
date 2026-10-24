@@ -13,8 +13,8 @@ sh scripts/package.sh release    # 优化后的应用包
 open dist/CNote.app
 ```
 
-- 原生 GPUI 窗口、虚拟化笔记列表、跟随系统的深浅色主题、侧边栏折叠和专注模式。
-- 左下角工具切换：`⌘1` 笔记、`⌘2` 文本处理（JSONPack）、`⌘3` Diff、`⌘4` CSV。工具页完全隐藏左侧栏，使用全部内容宽度；可通过快捷键或“视图”菜单切换工作区，切回笔记时恢复原侧栏状态。三个工具均为本地实现，在同一个内嵌编辑区域内切换；不嵌套在线页面、不下载运行时代码。Cocoa 原生事件监视器在 WKWebView / Ace 获得焦点时也处理快捷键，菜单“视图”保留对应入口。
+- 原生 GPUI 窗口、虚拟化笔记列表、支持顶栏“⋯”或“视图 → 主题”选择跟随系统 / 浅色 / 深色并记住偏好，窗口与编辑器同步切换、侧边栏折叠和专注模式。列表名称使用正文第一个非空标题，保存或下载内容后更新；没有正文标题时使用原笔记名称。
+- 顶栏固定工作区 Tab：`⌘1` 笔记、`⌘2` 文本处理（JSONPack）、`⌘3` Diff、`⌘4` CSV。工具页完全隐藏左侧栏，使用全部内容宽度；可点击顶栏 Tab、通过快捷键或“视图”菜单切换工作区，切回笔记时恢复原侧栏状态。三个工具均为本地实现，在同一个内嵌编辑区域内切换；不嵌套在线页面、不下载运行时代码。Cocoa 原生事件监视器在 WKWebView / Ace 获得焦点时也处理快捷键，菜单“视图”保留对应入口。
 - 富文本：粗体、斜体、下划线、删除线、代码、三级标题、有序/无序列表、缩进、撤销/重做、清除格式。
 - Markdown 快捷输入：行首 `#`、`##`、`###`、`-`、`*`、`1.`、`>`、`[]`、`[ ]` 后按空格。
 - 待办勾选会序列化到 HTML；表格支持插入和右键增删行列；支持粘贴图片、链接与富文本。
@@ -81,7 +81,19 @@ CNote 使用独立的 Ed25519 密钥：公钥位于 `assets/update-public-key.tx
 bash scripts/configure-signing.sh
 ```
 
-私钥与公钥必须保持配对并跨版本保留。默认更新源是 `mnhkahn/cnote`；构建其他仓库时设置 `CNOTE_UPDATE_REPOSITORY=owner/repo`。首个带更新组件的版本需手动安装，此后跟踪 GitHub 最新正式 Release。发布包目前使用本地 ad-hoc 签名；如需通过 Gatekeeper 无提示分发，需自行配置 Apple Developer ID 签名与公证。
+私钥与公钥必须保持配对并跨版本保留。默认更新源是 `mnhkahn/cnote`；构建其他仓库时设置 `CNOTE_UPDATE_REPOSITORY=owner/repo`。首个带更新组件的版本需手动安装，此后跟踪 GitHub 最新正式 Release。发布包和本机打包使用同一份固定自签名证书，公钥位于 `assets/code-signing-cert.pem`，私钥不入库。它让钥匙串识别升级后的 CNote 为同一应用；从旧 ad-hoc 版迁移时首次可能仍需输入 Mac 密码并选“始终允许”。这不是 Touch ID 支持，也不代替 Apple Developer ID 签名或公证。
+
+签名私钥、加密 PKCS#12 备份、随机密码和独立钥匙串保存在本机 `~/Library/Application Support/CNote/code-signing/`（目录 700、私密文件 600）。构建时只为此证书添加代码签名信任，不添加 TLS 信任；临时加入钥匙串搜索列表后会恢复并锁定。不要删除或重建这份身份；换机器时需安全备份并恢复整个目录。首次配置 / 重传 GitHub Secrets：
+
+```sh
+# 新建证书需要 OpenSSL 3；已固定公钥时绝不自动生成替代证书。
+python3 scripts/code-signing.py configure --upload
+python3 scripts/test-code-signing.py
+```
+
+`configure --upload` 把加密身份和随机密码分别写入仓库 Secrets `CNOTE_SIGNING_P12` / `CNOTE_SIGNING_PASSWORD`。发布工作流导入后先对照公钥证书，再验证两个不同版本能在禁止交互时共用测试钥匙串条目；构建结束删除临时钥匙串和构建机信任。缺失或不匹配时中止发布，不能退回 ad-hoc 签名。Sparkle 原有更新签名密钥保持独立。
+
+普通 PR/分支 CI 不接触私钥，通过 `CNOTE_ALLOW_ADHOC=1 sh scripts/package.sh debug` 显式生成临时签名开发包；开发包不保证跨版本保留钥匙串授权，不能作为正式升级包，release 打包禁止这个选项。
 
 打包时版本号统一取自 tag：Actions 使用触发发布的 tag；本地省略版本时使用当前提交可达的最高稳定版本 tag。没有 tag 时须显式指定，例如 `sh scripts/package.sh debug v0.0.2`。安装包、Sparkle 比较版本、统计和请求 User-Agent 均使用此版本，不再将 Cargo 的 crate 版本当作应用打包版本。CI 会完整拉取 tag。可设置 `CNOTE_BUNDLE_PATH=dist/preview/CNote.app` 将包生成到另一个目录。
 

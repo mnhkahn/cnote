@@ -52,11 +52,18 @@ jobs:
           fi
           version=$(python3 scripts/bundle-info.py --version "$RELEASE_TAG")
           echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Import fixed code-signing identity
+        env:
+          CNOTE_SIGNING_P12: ${{ secrets.CNOTE_SIGNING_P12 }}
+          CNOTE_SIGNING_PASSWORD: ${{ secrets.CNOTE_SIGNING_PASSWORD }}
+        run: python3 scripts/code-signing.py import-ci
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: cnote
           key: release-${{ matrix.arch }}
+      - name: Verify cross-version Keychain access
+        run: python3 scripts/test-code-signing.py
       - name: Test native update restart guard
         run: sh scripts/test-updater.sh
       - name: Run Rust tests
@@ -86,6 +93,9 @@ jobs:
           path: cnote/release-assets/*
           if-no-files-found: error
           retention-days: 7
+      - name: Remove temporary signing identity
+        if: always()
+        run: python3 scripts/code-signing.py cleanup-ci
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')

@@ -1,6 +1,7 @@
 use crate::{
     cloud::{self, Job, Reply},
     store::{self, Note, Store, Summary},
+    theme::Theme,
 };
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -25,6 +26,9 @@ pub enum Command {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    Theme {
+        theme: Theme,
+    },
     State {
         cache_generation: u64,
         cache_account: String,
@@ -49,9 +53,14 @@ pub enum Event {
         id: String,
         intent: u64,
     },
+    Title {
+        id: String,
+        title: String,
+    },
     Saved {
         id: String,
         seq: u64,
+        title: String,
     },
     Dialog {
         kind: String,
@@ -111,6 +120,16 @@ struct Engine {
 impl Engine {
     fn emit(&self, e: Event) {
         let _ = self.events.send_blocking(e);
+    }
+    fn restore_theme(&self) {
+        let theme = self
+            .db
+            .setting("theme")
+            .ok()
+            .flatten()
+            .and_then(|value| Theme::parse(&value))
+            .unwrap_or_default();
+        self.emit(Event::Theme { theme });
     }
     fn state(&self) -> Result<()> {
         self.emit(Event::State {
@@ -266,6 +285,10 @@ impl Engine {
             note.baseline = html;
             note.etag = Some(etag);
             self.db.put(&note)?;
+            self.emit(Event::Title {
+                id: note.id.clone(),
+                title: self.db.display_title(&note.id)?,
+            });
             if self.selected.as_deref() == Some(note.id.as_str()) {
                 self.emit(Event::Load {
                     intent: self.intent,
@@ -432,6 +455,12 @@ impl Engine {
                 self.show(&n.id)?;
                 self.state()?;
             }
+            "theme" => {
+                let theme =
+                    Theme::parse(v["value"].as_str().unwrap_or_default()).context("未知主题")?;
+                self.db.set_setting("theme", theme.as_str())?;
+                self.emit(Event::Theme { theme });
+            }
             "change" => {
                 self.db.save_html(
                     id,
@@ -442,6 +471,7 @@ impl Engine {
                 self.emit(Event::Saved {
                     id: id.into(),
                     seq: v["seq"].as_u64().unwrap_or(0),
+                    title: self.db.display_title(id)?,
                 });
                 self.next_sync = Instant::now() + Duration::from_secs(2);
             }
@@ -840,6 +870,7 @@ pub fn start(path: PathBuf) -> Handle {
             if !(cfg!(debug_assertions) && std::env::var_os("CNOTE_SMOKE_TEST").is_some()) {
                 e.job(Job::Restore);
             }
+            e.restore_theme();
             let _ = e.state();
             loop {
                 let timeout = if e.warm_queue.is_empty() {
@@ -1092,6 +1123,56 @@ mod tests {
         ));
         assert!(rx.try_recv().is_err());
         assert_eq!(e.db.get(&n.id).unwrap().html, "<p>Changed</p>");
+    }
+    #[test]
+    fn saving_a_heading_sends_a_small_title_update() {
+        let mut e = engine();
+        let n = e.db.create("OpenClaw", "alice").unwrap();
+        let (tx, rx) = async_channel::unbounded();
+        e.events = tx;
+        e.dispatch(json!({"type":"change","id":n.id,"html":"<h2>AI各种琢磨</h2>","seq":1}))
+            .unwrap();
+        assert!(
+            matches!(rx.try_recv().unwrap(), Event::Saved { title, .. } if title == "AI各种琢磨")
+        );
+        assert!(rx.try_recv().is_err());
+    }
+    #[test]
+    fn theme_selection_is_saved_and_restored_independently_of_notes() {
+        let mut e = engine();
+        let (tx, rx) = async_channel::unbounded();
+        e.events = tx;
+        e.restore_theme();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Event::Theme {
+                theme: Theme::System
+            }
+        ));
+        for theme in [Theme::Dark, Theme::Light, Theme::System] {
+            e.dispatch(json!({"type":"theme","value":theme.as_str()}))
+                .unwrap();
+            assert!(
+                matches!(rx.try_recv().unwrap(), Event::Theme { theme: saved } if saved == theme)
+            );
+            assert_eq!(
+                e.db.setting("theme").unwrap().as_deref(),
+                Some(theme.as_str())
+            );
+            e.restore_theme();
+            assert!(
+                matches!(rx.try_recv().unwrap(), Event::Theme { theme: saved } if saved == theme)
+            );
+        }
+        assert!(e.db.list("alice").unwrap().is_empty());
+        e.db.set_setting("theme", "invalid").unwrap();
+        e.restore_theme();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Event::Theme {
+                theme: Theme::System
+            }
+        ));
     }
     #[test]
     fn save_errors_identify_the_draft_for_background_retry() {

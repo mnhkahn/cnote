@@ -129,6 +129,8 @@ static SHORTCUTS: std::sync::OnceLock<async_channel::Sender<Workspace>> =
 unsafe extern "C" {
     fn cnote_workspace_install(callback: extern "C" fn(u32)) -> std::ffi::c_int;
     fn cnote_workspace_test_key(index: u32);
+    fn cnote_workspace_show_more_menu();
+    fn cnote_workspace_test_more_menu();
     fn cnote_workspace_test_navigation(index: u32, shift: std::ffi::c_int);
 }
 extern "C" fn shortcut(index: u32) {
@@ -145,6 +147,15 @@ pub fn install_shortcuts(tx: async_channel::Sender<Workspace>) {
         eprintln!("CNote: 原生工作区快捷键安装失败");
     }
 }
+/// Schedule a native popup outside GPUI’s update to allow menu action dispatch.
+pub fn show_more_menu() {
+    unsafe { cnote_workspace_show_more_menu() };
+}
+
+pub fn test_more_menu() {
+    unsafe { cnote_workspace_test_more_menu() };
+}
+
 pub fn test_key(page: Workspace) {
     unsafe {
         cnote_workspace_test_key(page.index() as u32);

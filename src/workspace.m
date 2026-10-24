@@ -94,6 +94,47 @@ int cnote_workspace_install(void (*callback)(unsigned int)) {
     }
     return workspaceMonitor != nil;
 }
+
+// Copy the application's menu items so their checked states and GPUI actions
+// stay identical in both entry points. Cocoa draws above the child WKWebView.
+static NSMenu *workspaceMoreMenu(void) {
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"更多"];
+    NSMenuItem *theme = [[NSApp.mainMenu itemWithTitle:@"视图"].submenu itemWithTitle:@"主题"];
+    if (theme) {
+        NSMenuItem *copy = [theme copy];
+        // A detached popup has no main-menu responder-chain context.
+        for (NSMenuItem *item in copy.submenu.itemArray) item.target = NSApp.delegate;
+        [menu addItem:copy];
+    }
+    NSMenuItem *update = [[NSApp.mainMenu itemWithTitle:@"窗口"].submenu itemWithTitle:@"检查更新…"];
+    if (update) {
+        [menu addItem:NSMenuItem.separatorItem];
+        NSMenuItem *copy = [update copy];
+        copy.target = NSApp.delegate;
+        [menu addItem:copy];
+    }
+    return menu;
+}
+void cnote_workspace_show_more_menu(void) {
+    NSWindow *window = NSApp.mainWindow;
+    if (!window) return;
+    NSPoint location = [window.contentView convertPoint:window.mouseLocationOutsideOfEventStream fromView:nil];
+    // Run on the next Cocoa turn, after GPUI releases its mutable app borrow.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!window.visible) return;
+        [workspaceMoreMenu() popUpMenuPositioningItem:nil atLocation:location inView:window.contentView];
+    });
+}
+// Exercise the copied menu's actual GPUI action without opening a blocking popup.
+void cnote_workspace_test_more_menu(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSMenu *theme = [workspaceMoreMenu() itemWithTitle:@"主题"].submenu;
+        NSCAssert([theme itemWithTitle:@"深色"] != nil, @"Missing theme menu");
+        NSMenuItem *item = [theme itemWithTitle:@"深色"];
+        BOOL dispatched = [NSApp sendAction:item.action to:item.target from:item];
+        NSCAssert(dispatched, @"Theme menu action must reach GPUI");
+    });
+}
 // The smoke test posts real Cocoa key events while WKWebView is first responder.
 void cnote_workspace_test_key(unsigned int index) {
     if (index > 3 || !NSApp.mainWindow) return;
