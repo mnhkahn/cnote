@@ -15,6 +15,10 @@ const ENDPOINT: &str = "https://us.i.posthog.com/batch/";
 const CAPACITY: usize = 128;
 const BATCH_SIZE: usize = 32;
 const INTERVAL: Duration = Duration::from_secs(5);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_ATTEMPTS: usize = 3;
+const RETRY_DELAY: Duration = Duration::from_secs(1);
 static TRACKER: OnceLock<SyncSender<Message>> = OnceLock::new();
 
 pub enum Event {
@@ -79,8 +83,8 @@ pub fn start(directory: PathBuf) {
         .name("cnote-analytics".into())
         .spawn(move || {
             let Ok(client) = reqwest::blocking::Client::builder()
-                .connect_timeout(Duration::from_secs(1))
-                .timeout(Duration::from_millis(2500))
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(REQUEST_TIMEOUT)
                 .redirect(reqwest::redirect::Policy::none())
                 .user_agent(concat!("CNote/", env!("CNOTE_APP_VERSION")))
                 .build()
@@ -89,7 +93,7 @@ pub fn start(directory: PathBuf) {
             };
             let id = installation_id(&directory);
             worker(rx, INTERVAL, |events| {
-                // No retries, response/error logging, or shared OneDrive connection pool.
+                // Retries stay on this bounded background worker, separate from OneDrive.
                 send_batch(&client, ENDPOINT, &id, events);
             });
         });
@@ -141,7 +145,36 @@ fn worker(rx: Receiver<Message>, interval: Duration, mut send: impl FnMut(&[Even
     }
 }
 fn send_batch(client: &reqwest::blocking::Client, endpoint: &str, id: &str, events: &[Event]) {
-    let _ = client.post(endpoint).json(&payload(id, events)).send();
+    // Keep event UUIDs and timestamps stable if the server accepted a request whose
+    // response was lost. PostHog can then deduplicate a retried event.
+    let body = payload(id, events);
+    if !deliver_batch(client, endpoint, &body, RETRY_DELAY) {
+        // Never log the request, installation ID, token or raw network error.
+        eprintln!("CNote: anonymous usage upload failed; batch dropped");
+    }
+}
+fn deliver_batch(
+    client: &reqwest::blocking::Client,
+    endpoint: &str,
+    body: &Value,
+    retry_delay: Duration,
+) -> bool {
+    for attempt in 0..MAX_ATTEMPTS {
+        match client.post(endpoint).json(body).send() {
+            Ok(response) if response.status().is_success() => return true,
+            Ok(response) => {
+                let status = response.status();
+                if status != reqwest::StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
+                    return false;
+                }
+            }
+            Err(_) => {}
+        }
+        if attempt + 1 < MAX_ATTEMPTS {
+            std::thread::sleep(retry_delay * (1 << attempt));
+        }
+    }
+    false
 }
 fn payload(id: &str, events: &[Event]) -> Value {
     let batch: Vec<_> = events
@@ -185,7 +218,7 @@ fn payload(id: &str, events: &[Event]) -> Value {
                     }
                 }
             };
-            json!({"event": name, "timestamp": timestamp(), "properties": props})
+            json!({"uuid": uuid::Uuid::new_v4().to_string(), "event": name, "timestamp": timestamp(), "properties": props})
         })
         .collect();
     json!({"api_key": PROJECT_TOKEN, "batch": batch})
@@ -381,6 +414,80 @@ mod tests {
             body["batch"][0]["properties"]["distinct_id"],
             "cnote:local-test"
         );
+    }
+    #[test]
+    fn retries_transient_failures_with_stable_event_identity_and_stops_at_limit() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        // Zero simulates a connection closing before an HTTP response arrives.
+        for (statuses, expected) in [
+            (vec![500, 200], true),
+            (vec![429, 200], true),
+            (vec![0, 200], true),
+            (vec![400], false),
+            (vec![302], false),
+            (vec![503; MAX_ATTEMPTS], false),
+        ] {
+            let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            server.set_nonblocking(true).unwrap();
+            let address = format!("http://{}/batch/", server.local_addr().unwrap());
+            let attempts = statuses.len();
+            let received = std::thread::spawn(move || {
+                let mut bodies = Vec::new();
+                for status in statuses {
+                    let deadline = Instant::now() + Duration::from_secs(3);
+                    let stream = loop {
+                        match server.accept() {
+                            Ok((stream, _)) => break stream,
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                assert!(Instant::now() < deadline, "missing retry");
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                            Err(e) => panic!("accept: {e}"),
+                        }
+                    };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(3)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut length = None;
+                    loop {
+                        let mut line = String::new();
+                        assert!(reader.read_line(&mut line).unwrap() > 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) =
+                            line.to_ascii_lowercase().strip_prefix("content-length:")
+                        {
+                            length = Some(value.trim().parse::<usize>().unwrap());
+                        }
+                    }
+                    let mut bytes = vec![0; length.unwrap()];
+                    reader.read_exact(&mut bytes).unwrap();
+                    bodies.push(serde_json::from_slice::<Value>(&bytes).unwrap());
+                    if status != 0 {
+                        write!(reader.get_mut(), "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    }
+                }
+                bodies
+            });
+            let client = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(REQUEST_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap();
+            let body = payload("cnote:local-test", &[Event::Started]);
+            assert_eq!(
+                deliver_batch(&client, &address, &body, Duration::ZERO),
+                expected
+            );
+            let bodies = received.join().unwrap();
+            assert_eq!(bodies.len(), attempts);
+            assert!(bodies.iter().all(|received| received == &body));
+            assert!(uuid::Uuid::parse_str(body["batch"][0]["uuid"].as_str().unwrap()).is_ok());
+        }
     }
     #[test]
     fn slow_upload_cannot_block_producers_and_queue_is_bounded() {
