@@ -285,6 +285,9 @@ mod tests {
                     Err(e) => panic!("accept: {e}"),
                 }
             };
+            // macOS may inherit O_NONBLOCK from the listener. A read timeout
+            // does not clear it, so reading before the SDK writes can fail immediately.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();

@@ -1,0 +1,29 @@
+name: Notify Feishu of build results
+
+on:
+  workflow_run:
+    workflows: ['Build and test', 'Release macOS packages']
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    if: >-
+      contains(fromJSON('["failure","timed_out"]'), github.event.workflow_run.conclusion) ||
+      (github.event.workflow_run.name == 'Release macOS packages' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      # workflow_run has secrets even for fork PRs. Execute only default-branch
+      # notification code, never code/artifacts from the triggering build.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Send build result and links to Feishu
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: python3 scripts/notify-build.py
