@@ -89,6 +89,7 @@ impl Notebook {
             )
             .replace("/* TOOL_ACE */", include_str!("../tools/vendor/ace.b64"))
             .replace("/* WORKSPACE */", workspace::SHORTCUT_SCRIPT)
+            .replace("/* THEME_CATALOG */ []", crate::theme::CATALOG)
             .replace("/* TOOL_SCRIPT */", include_str!("../tools/tools.js"))
             .replace("/* SCRIPT */", include_str!("../editor/editor.js"));
         let view = wry::WebViewBuilder::new()
@@ -239,9 +240,15 @@ impl Notebook {
         let _ = window;
         cx.notify();
     }
-    fn workspace_bar(&self, dark: bool, muted: u32, cx: &Context<Self>) -> impl IntoElement {
-        let tray = if dark { 0x101520 } else { 0xe9edf3 };
-        let selected_bg = if dark { 0x30394a } else { 0xffffff };
+    fn workspace_bar(
+        &self,
+        palette: &crate::theme::Palette,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let tray = palette.rgb(&palette.line);
+        let selected_bg = palette.rgb(&palette.bg);
+        let muted = palette.rgb(&palette.muted);
+        let accent = palette.rgb(&palette.accent);
         div()
             .flex()
             .gap_1()
@@ -259,7 +266,7 @@ impl Notebook {
                     .h(px(30.))
                     .rounded_md()
                     .cursor_pointer()
-                    .text_color(rgb(if selected { 0x0d6efd } else { muted }))
+                    .text_color(rgb(if selected { accent } else { muted }))
                     .when(selected, |d| d.bg(rgb(selected_bg)).shadow_sm())
                     .hover(|d| d.bg(rgb(selected_bg)))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -620,12 +627,16 @@ impl Notebook {
 }
 impl Render for Notebook {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let dark = self.theme.is_dark(window.appearance());
-        let (bg, sidebar, ink, muted, line, active) = if dark {
-            (0x191e29, 0x151a24, 0xdfe7f3, 0x8390a4, 0x2b3240, 0x233c63)
-        } else {
-            (0xffffff, 0xf6f8fb, 0x253047, 0x8792a2, 0xe7ecf3, 0xe7f0ff)
-        };
+        let palette = self.theme.palette(window.appearance());
+        let (bg, sidebar, ink, muted, line, active, accent) = (
+            palette.rgb(&palette.bg),
+            palette.rgb(&palette.sidebar),
+            palette.rgb(&palette.ink),
+            palette.rgb(&palette.muted),
+            palette.rgb(&palette.line),
+            palette.rgb(&palette.active),
+            palette.rgb(&palette.accent),
+        );
         let notes = self.notes.clone();
         let selected = self.selected.clone();
         let weak = cx.weak_entity();
@@ -664,7 +675,7 @@ impl Render for Notebook {
                                     div()
                                         .font_family("bootstrap-icons")
                                         .text_size(px(14.))
-                                        .text_color(rgb(if chosen { 0x0d6efd } else { muted }))
+                                        .text_color(rgb(if chosen { accent } else { muted }))
                                         .child(icons::glyph("file-earmark-text")),
                                 )
                                 .child(
@@ -742,7 +753,7 @@ impl Render for Notebook {
                     .child(
                         div()
                             .font_family("bootstrap-icons")
-                            .text_color(rgb(0x0d6efd))
+                            .text_color(rgb(accent))
                             .text_size(px(25.))
                             .child(icons::glyph("journal-text")),
                     )
@@ -887,7 +898,7 @@ impl Render for Notebook {
                             )
                         },
                     ))
-                    .child(self.workspace_bar(dark, muted, cx))
+                    .child(self.workspace_bar(palette, cx))
                     .child(
                         div().w(px(140.)).flex_none().flex().justify_end().child(
                             div()

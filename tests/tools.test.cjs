@@ -25,6 +25,13 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' lo
    await page.evaluate(()=>cnoteTheme.set('dark'));
    assert.equal(await page.locator('#local-tools').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(25, 30, 41)');
    assert.equal(await page.locator('#tool-text-editor').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(25, 30, 41)');
+   for(const theme of require('../editor/themes.json')){
+    await page.evaluate(id=>cnoteTheme.set(id),theme.id);
+    const expected='rgb('+theme.bg.match(/../g).map(v=>parseInt(v,16)).join(', ')+')';
+    assert.equal(await page.locator('#local-tools').evaluate(el=>getComputedStyle(el).backgroundColor),expected);
+    assert.equal(await page.locator('#tool-text-editor').evaluate(el=>getComputedStyle(el).backgroundColor),expected);
+    assert.equal(await page.evaluate(()=>cnoteTools.state.text),original);
+   }
    await page.evaluate(()=>cnoteTheme.set('light'));
    assert.equal(await page.locator('#tool-text-editor').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(255, 255, 255)');
    assert.equal(await page.evaluate(()=>cnoteTools.state.text),original);

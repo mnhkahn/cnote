@@ -1149,7 +1149,7 @@ mod tests {
                 theme: Theme::System
             }
         ));
-        for theme in [Theme::Dark, Theme::Light, Theme::System] {
+        for theme in Theme::ALL {
             e.dispatch(json!({"type":"theme","value":theme.as_str()}))
                 .unwrap();
             assert!(

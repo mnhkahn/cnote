@@ -2,8 +2,19 @@
 (() => {
  const system = matchMedia('(prefers-color-scheme: dark)');
  let preference = 'system';
- const apply = () => document.documentElement.dataset.theme = preference === 'system' ? (system.matches ? 'dark' : 'light') : preference;
- window.cnoteTheme = {set(value) {if (!['system','light','dark'].includes(value)) return; preference = value; apply();}};
+ const themes = /* THEME_CATALOG */ [];
+ const apply = () => {
+  const id = preference === 'system' ? (system.matches ? 'dark' : 'light') : preference;
+  const palette = themes.find(theme => theme.id === id);
+  if (!palette) return;
+  const root = document.documentElement;
+  root.dataset.theme = id;
+  root.dataset.appearance = palette.dark ? 'dark' : 'light';
+  root.style.colorScheme = root.dataset.appearance;
+  root.style.setProperty('--on-accent', palette.dark ? '#111111' : '#ffffff');
+  for (const key of ['bg','ink','muted','line','active','accent','soft']) root.style.setProperty('--' + key, '#' + palette[key]);
+ };
+ window.cnoteTheme = {set(value) {if (value !== 'system' && !themes.some(theme => theme.id === value)) return; preference = value; apply();}};
  system.addEventListener('change', () => {if (preference === 'system') apply();});
  apply();
 })();

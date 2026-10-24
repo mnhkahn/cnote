@@ -22,7 +22,25 @@ actions!(
         ShowCsv,
         ThemeSystem,
         ThemeLight,
-        ThemeDark
+        ThemeDark,
+        ThemeSepia,
+        ThemeSakura,
+        ThemeMint,
+        ThemeLavender,
+        ThemeSand,
+        ThemeArctic,
+        ThemeSolarizedLight,
+        ThemeIvory,
+        ThemeSky,
+        ThemeNord,
+        ThemeForest,
+        ThemeDracula,
+        ThemeMonokai,
+        ThemeMidnight,
+        ThemeOcean,
+        ThemeGruvbox,
+        ThemeSolarizedDark,
+        ThemeCharcoal,
     ]
 );
 pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
@@ -59,6 +77,96 @@ pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
     cx.on_action(move |_: &ThemeDark, cx| {
         cx.defer(move |cx| {
             let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Dark, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeSepia, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Sepia, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeSakura, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Sakura, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeMint, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Mint, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeLavender, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Lavender, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeSand, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Sand, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeArctic, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Arctic, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeSolarizedLight, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::SolarizedLight, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeIvory, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Ivory, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeSky, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Sky, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeNord, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Nord, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeForest, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Forest, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeDracula, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Dracula, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeMonokai, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Monokai, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeMidnight, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Midnight, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeOcean, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Ocean, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeGruvbox, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Gruvbox, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeSolarizedDark, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::SolarizedDark, cx));
+        });
+    });
+    cx.on_action(move |_: &ThemeCharcoal, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::Charcoal, cx));
         });
     });
     cx.on_action(move |_: &ShowNotes, cx| {
@@ -168,11 +276,47 @@ pub fn set_menus(cx: &mut App, theme: Theme) {
             MenuItem::action("CSV 表格", ShowCsv),
             MenuItem::separator(),
             MenuItem::action("显示 / 隐藏侧栏", ToggleSidebar),
-            MenuItem::submenu(Menu::new("主题").items([
-                MenuItem::action("跟随系统", ThemeSystem).checked(theme == Theme::System),
-                MenuItem::action("浅色", ThemeLight).checked(theme == Theme::Light),
-                MenuItem::action("深色", ThemeDark).checked(theme == Theme::Dark),
-            ])),
+            MenuItem::submenu(
+                Menu::new("主题").items([
+                    MenuItem::action(Theme::System.label(), ThemeSystem)
+                        .checked(theme == Theme::System),
+                    MenuItem::action(Theme::Light.label(), ThemeLight)
+                        .checked(theme == Theme::Light),
+                    MenuItem::action(Theme::Dark.label(), ThemeDark).checked(theme == Theme::Dark),
+                    MenuItem::action(Theme::Sepia.label(), ThemeSepia)
+                        .checked(theme == Theme::Sepia),
+                    MenuItem::action(Theme::Sakura.label(), ThemeSakura)
+                        .checked(theme == Theme::Sakura),
+                    MenuItem::action(Theme::Mint.label(), ThemeMint).checked(theme == Theme::Mint),
+                    MenuItem::action(Theme::Lavender.label(), ThemeLavender)
+                        .checked(theme == Theme::Lavender),
+                    MenuItem::action(Theme::Sand.label(), ThemeSand).checked(theme == Theme::Sand),
+                    MenuItem::action(Theme::Arctic.label(), ThemeArctic)
+                        .checked(theme == Theme::Arctic),
+                    MenuItem::action(Theme::SolarizedLight.label(), ThemeSolarizedLight)
+                        .checked(theme == Theme::SolarizedLight),
+                    MenuItem::action(Theme::Ivory.label(), ThemeIvory)
+                        .checked(theme == Theme::Ivory),
+                    MenuItem::action(Theme::Sky.label(), ThemeSky).checked(theme == Theme::Sky),
+                    MenuItem::action(Theme::Nord.label(), ThemeNord).checked(theme == Theme::Nord),
+                    MenuItem::action(Theme::Forest.label(), ThemeForest)
+                        .checked(theme == Theme::Forest),
+                    MenuItem::action(Theme::Dracula.label(), ThemeDracula)
+                        .checked(theme == Theme::Dracula),
+                    MenuItem::action(Theme::Monokai.label(), ThemeMonokai)
+                        .checked(theme == Theme::Monokai),
+                    MenuItem::action(Theme::Midnight.label(), ThemeMidnight)
+                        .checked(theme == Theme::Midnight),
+                    MenuItem::action(Theme::Ocean.label(), ThemeOcean)
+                        .checked(theme == Theme::Ocean),
+                    MenuItem::action(Theme::Gruvbox.label(), ThemeGruvbox)
+                        .checked(theme == Theme::Gruvbox),
+                    MenuItem::action(Theme::SolarizedDark.label(), ThemeSolarizedDark)
+                        .checked(theme == Theme::SolarizedDark),
+                    MenuItem::action(Theme::Charcoal.label(), ThemeCharcoal)
+                        .checked(theme == Theme::Charcoal),
+                ]),
+            ),
         ]),
         Menu::new("窗口").items([MenuItem::action("检查更新…", CheckUpdates)]),
     ]);

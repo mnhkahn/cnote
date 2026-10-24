@@ -61,7 +61,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: cnote
-          key: release-${{ matrix.arch }}
+          shared-key: macos-release-${{ matrix.arch }}
+          # Seeded on the default branch by ci.yml. Tag-only caches cannot be
+          # reused by the next release and take minutes to clean and upload.
+          save-if: 'false'
       - name: Verify cross-version Keychain access
         run: python3 scripts/test-code-signing.py
       - name: Test native update restart guard

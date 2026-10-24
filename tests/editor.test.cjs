@@ -24,7 +24,7 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
     await page.emulateMedia({colorScheme:'light'});
     await receive({type:'theme',theme:'dark'});
     assert.equal(await page.locator('body').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(25, 30, 41)');
-    assert.equal(await page.locator('#save').evaluate(el=>getComputedStyle(el).color),'rgb(255, 255, 255)');
+    assert.equal(await page.locator('#save').evaluate(el=>getComputedStyle(el).color),'rgb(17, 17, 17)');
     await page.emulateMedia({colorScheme:'dark'});
     await receive({type:'theme',theme:'light'});
     assert.equal(await page.locator('body').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(255, 255, 255)');
@@ -32,6 +32,32 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
     await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
     await page.emulateMedia({colorScheme:'light'});
     await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');
+   });
+   await t.test('all 20 palettes switch without changing content and remain readable',async()=>{
+    const themes=require('../editor/themes.json');
+    assert.equal(themes.length,20);
+    const original=await page.locator('#editor').innerHTML();
+    const luminance=hex=>{
+     const c=hex.match(/../g).map(v=>parseInt(v,16)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);
+     return c[0]*.2126+c[1]*.7152+c[2]*.0722;
+    };
+    const contrast=(a,b)=>(Math.max(luminance(a),luminance(b))+.05)/(Math.min(luminance(a),luminance(b))+.05);
+    for(const theme of themes){
+     await page.emulateMedia({colorScheme:theme.dark?'light':'dark'});
+     await receive({type:'theme',theme:theme.id});
+     const result=await page.evaluate(()=>({id:document.documentElement.dataset.theme,appearance:document.documentElement.dataset.appearance,bg:getComputedStyle(document.body).backgroundColor,accent:getComputedStyle(document.getElementById('save')).backgroundColor}));
+     const rgb=hex=>'rgb('+hex.match(/../g).map(v=>parseInt(v,16)).join(', ')+')';
+     assert.equal(result.id,theme.id);
+     assert.equal(result.appearance,theme.dark?'dark':'light');
+     assert.equal(result.bg,rgb(theme.bg));assert.equal(result.accent,rgb(theme.accent));
+     assert(contrast(theme.ink,theme.bg)>=4.5,theme.id+' body contrast');
+     assert(contrast(theme.dark?'111111':'ffffff',theme.accent)>=4.5,theme.id+' button contrast');
+     assert.equal(await page.locator('#editor').innerHTML(),original);
+    }
+    await receive({type:'theme',theme:'unknown'});
+    assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),'charcoal');
+    await receive({type:'theme',theme:'system'});
+    await page.emulateMedia({colorScheme:'light'});
    });
    await t.test('Command 1–4 switches workspaces while editing without mutating drafts',async()=>{
     const editor=page.locator('#editor');await editor.click();
