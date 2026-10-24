@@ -29,9 +29,12 @@ def signing_directory():
     return pathlib.Path(os.environ.get('CNOTE_SIGNING_DIR', default))
 
 
-def run(args, *, data=None):
+def run(args, *, data=None, timeout=None):
     # Never print commands: security's CLI requires passwords in some arguments.
-    result = subprocess.run([str(arg) for arg in args], input=data, capture_output=True)
+    try:
+        result = subprocess.run([str(arg) for arg in args], input=data, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f'{pathlib.Path(args[0]).name} {args[1]} timed out after {timeout}s; private arguments and output suppressed') from None
     if result.returncode:
         raise RuntimeError(f'{pathlib.Path(args[0]).name} {args[1]} failed (exit {result.returncode}); private arguments and output suppressed')
     return result.stdout
@@ -211,15 +214,26 @@ def _sign_file(directory, path, identity, identifier=None):
 def cleanup_ci(directory):
     if os.environ.get('GITHUB_ACTIONS') != 'true':
         raise RuntimeError('cleanup-ci is restricted to disposable GitHub Actions runners.')
-    keychain = directory / 'identity.keychain-db'
-    if keychain.exists():
-        run(['security', 'delete-keychain', keychain])
+    errors = []
     certificate = directory / 'certificate.pem'
+    keychain = directory / 'identity.keychain-db'
+    commands = []
     if certificate.exists():
-        # Only remove admin trust if import-ci reached the trust operation.
-        subprocess.run(['sudo', 'security', 'remove-trusted-cert', '-d', str(certificate)], capture_output=True)
+        # Remove trust before deleting the keychain. Never wait for a sudo prompt.
+        commands.append(('Remove signing certificate trust',
+                         ['sudo', '-n', 'security', 'remove-trusted-cert', '-d', certificate]))
+    if keychain.exists():
+        commands.append(('Delete temporary signing keychain', ['security', 'delete-keychain', keychain]))
+    for label, command in commands:
+        print(f'{label} (timeout: 30s)', flush=True)
+        try:
+            run(command, timeout=30)
+        except (RuntimeError, OSError) as error:
+            errors.append(str(error))
     if directory.exists():
         shutil.rmtree(directory)
+    if errors:
+        raise RuntimeError('Signing cleanup failed: ' + '; '.join(errors))
 
 
 def main():

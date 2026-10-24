@@ -93,9 +93,9 @@ jobs:
           path: cnote/release-assets/*
           if-no-files-found: error
           retention-days: 7
-      - name: Remove temporary signing identity
-        if: always()
-        run: python3 scripts/code-signing.py cleanup-ci
+      # GitHub-hosted macOS VMs are destroyed after the job, including the
+      # temporary signing keychain. Explicit cleanup can hang Security.framework
+      # and prevent the publish job from starting after artifacts are uploaded.
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
