@@ -44,17 +44,19 @@ open dist/CNote.app
 
 ## 使用统计
 
-正式版复用 `cyeam-cli` 的 PostHog 项目，后台直接向 `https://us.i.posthog.com/batch/` 上报。所有事件均带 `app=cnote`、`platform=macos`、`app_version`、`os` 和 `architecture`；仪表盘按 `app=cnote` 筛选即可与 CLI 分开。活跃用户按匿名安装 ID 统计，不等同于 Microsoft 账号数。
+正式版复用 `cyeam-cli` 的 PostHog 项目，通过官方 `posthog-rs` SDK 上报。所有事件均带 `app=cnote`、`platform=macos`、`app_version`、`os` 和 `architecture`；仪表盘按 `app=cnote` 筛选即可与 CLI 分开。活跃用户按匿名安装 ID 统计，不等同于 Microsoft 账号数。
 
-统计请求在独立后台线程发送，连接超时 5 秒、单次请求超时 10 秒；网络错误、429 和 5xx 最多尝试 3 次，间隔 1 秒、2 秒，重试保留事件 UUID 和时间戳。其他 HTTP 错误直接放弃，最终失败只输出不含身份和令牌的通用提示。队列保持有界，退出最多等待 300 毫秒；仍属尽力上报，失败事件不会落盘补传。
+使用 SDK 的同步接口，`capture` 只入队，实际网络发送由 SDK 后台线程完成。批量发送、请求超时、失败重试和退出排空采用 SDK 默认策略；应用不再实现 HTTP 上报、退避或网络超时。SDK 队列最多保留 128 条事件，退出时显式调用 `shutdown()` 排空；最终上报失败只输出不含身份和令牌的通用提示。
 
 随机安装 ID 存在应用数据目录下的 `analytics-id`，使用 `cnote:` 前缀，与 CLI 的安装 ID 独立。不上报笔记标题、正文、笔记 ID、账号、令牌或原始错误信息，不启用网页自动采集或会话回放；PostHog 接收请求时仍能看到来源 IP。
 
 事件包括 `app_started`、`note_created`、`note_deleted`、`login_completed`、`session_restored`、`logout_completed` 和 `sync_completed`。云端事件带操作类别、结果（成功/失败/冲突/未登录）及请求耗时；查询同步成功率需过滤 `operation` 和 `outcome`，不能把所有事件都当作成功。耗时不包含云端任务排队时间。输入和本地自动保存不逐次上报。
 
-独立线程每五秒或累计 32 条发送，内存队列最多 128 条；队列满或有限重试仍失败时丢弃，不占用笔记同步线程。退出后最多等待统计 300 ms，短时会话、断网或异常退出可能漏报。
+统计仍属尽力上报，失败事件不落盘补传；队列满、长时间断网或异常退出可能漏报。SDK 会附带自身版本和系统信息，便于区分客户端实现。
 
 设置 `CNOTE_NO_ANALYTICS=1` 或 `DO_NOT_TRACK=1` 可关闭；`CI=true`、自动化测试和原生 smoke test 也关闭。Debug 构建默认关闭，可通过 `CNOTE_ANALYTICS_DEBUG=1 cargo run --locked` 启用；Release 构建默认开启。关闭时不初始化统计客户端或读写安装 ID。项目采集 Token 可内嵌，个人查询 API Key 不放入客户端。
+
+真实上报检查：`cargo test --locked analytics::tests::live_sdk_capture -- --ignored --exact --nocapture`。该检查默认跳过，手动运行时仅发送带 `integration_test=true` 的诊断事件，不计入正式日报；输出诊断安装 ID，便于在 PostHog 确认入库。
 
 ## 本地工具
 

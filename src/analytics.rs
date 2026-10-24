@@ -1,25 +1,19 @@
-//! Anonymous, bounded, best-effort PostHog capture. Never accepts user content.
-use serde_json::{Value, json};
+//! Anonymous, best-effort usage events delivered by the official PostHog SDK.
+use posthog_rs::{Client, ClientOptionsBuilder};
+use serde_json::json;
 use std::{
     path::{Path, PathBuf},
-    sync::{
-        OnceLock,
-        mpsc::{self, Receiver, SyncSender},
-    },
-    time::{Duration, Instant},
+    sync::OnceLock,
 };
 
 // Public ingestion token shared with cyeam-cli; never use a personal API key here.
 const PROJECT_TOKEN: &str = "phc_kBqNf6Fx4wEaDzDthoJBqvbVVRCVZZ5Pk8CbeZK49RBp";
-const ENDPOINT: &str = "https://us.i.posthog.com/batch/";
 const CAPACITY: usize = 128;
-const BATCH_SIZE: usize = 32;
-const INTERVAL: Duration = Duration::from_secs(5);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_ATTEMPTS: usize = 3;
-const RETRY_DELAY: Duration = Duration::from_secs(1);
-static TRACKER: OnceLock<SyncSender<Message>> = OnceLock::new();
+struct Tracker {
+    client: Client,
+    id: String,
+}
+static TRACKER: OnceLock<Tracker> = OnceLock::new();
 
 pub enum Event {
     Started,
@@ -48,11 +42,6 @@ pub enum Outcome {
     Conflict,
     LoggedOut,
 }
-enum Message {
-    Event(Event),
-    Flush(mpsc::Sender<()>),
-}
-
 fn truthy(value: &str) -> bool {
     matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
 }
@@ -70,162 +59,89 @@ fn disabled() -> bool {
             && !std::env::var("CNOTE_ANALYTICS_DEBUG").is_ok_and(|v| truthy(&v)))
 }
 
+fn client_options() -> ClientOptionsBuilder {
+    let mut options = ClientOptionsBuilder::default();
+    options
+        .api_key(PROJECT_TOKEN.to_owned())
+        .is_server(false)
+        .max_queue_size(CAPACITY)
+        .on_error(|_| eprintln!("CNote: anonymous usage upload failed"));
+    options
+}
+
 pub fn start(directory: PathBuf) {
     if disabled() {
         return;
     }
-    let (tx, rx) = mpsc::sync_channel(CAPACITY);
-    if TRACKER.set(tx).is_err() {
-        return;
-    }
-    // Client initialization, installation ID I/O and JSON encoding stay off the UI thread.
-    let _ = std::thread::Builder::new()
-        .name("cnote-analytics".into())
-        .spawn(move || {
-            let Ok(client) = reqwest::blocking::Client::builder()
-                .connect_timeout(CONNECT_TIMEOUT)
-                .timeout(REQUEST_TIMEOUT)
-                .redirect(reqwest::redirect::Policy::none())
-                .user_agent(concat!("CNote/", env!("CNOTE_APP_VERSION")))
-                .build()
-            else {
-                return;
-            };
-            let id = installation_id(&directory);
-            worker(rx, INTERVAL, |events| {
-                // Retries stay on this bounded background worker, separate from OneDrive.
-                send_batch(&client, ENDPOINT, &id, events);
-            });
-        });
-    capture(Event::Started);
+    TRACKER.get_or_init(|| {
+        let tracker = Tracker {
+            client: posthog_rs::client(client_options().build().expect("valid PostHog options")),
+            id: installation_id(&directory),
+        };
+        tracker
+            .client
+            .capture(sdk_event(&tracker.id, &Event::Started));
+        tracker
+    });
 }
 pub fn capture(event: Event) {
-    if let Some(tx) = TRACKER.get() {
-        // Dropping telemetry under pressure is preferable to blocking any app worker.
-        let _ = tx.try_send(Message::Event(event));
+    if let Some(tracker) = TRACKER.get() {
+        // The SDK queues and sends on its own bounded background worker.
+        tracker.client.capture(sdk_event(&tracker.id, &event));
     }
 }
 pub fn shutdown() {
-    if let Some(tx) = TRACKER.get() {
-        let (done, wait) = mpsc::channel();
-        if tx.try_send(Message::Flush(done)).is_ok() {
-            // Called only after the UI has exited. A slow network never holds exit open.
-            let _ = wait.recv_timeout(Duration::from_millis(300));
-        }
+    if let Some(tracker) = TRACKER.get() {
+        // Called after the UI exits. Let the SDK drain with its default policy.
+        tracker.client.shutdown();
     }
 }
-fn worker(rx: Receiver<Message>, interval: Duration, mut send: impl FnMut(&[Event])) {
-    let mut events = Vec::with_capacity(BATCH_SIZE);
-    let mut deadline = Instant::now() + interval;
-    loop {
-        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(Message::Event(event)) => events.push(event),
-            Ok(Message::Flush(done)) => {
-                if !events.is_empty() {
-                    send(&events);
-                }
-                let _ = done.send(());
-                return;
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if !events.is_empty() {
-                    send(&events);
-                }
-                return;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-        }
-        if events.len() >= BATCH_SIZE || Instant::now() >= deadline {
-            if !events.is_empty() {
-                send(&events);
-                events.clear();
-            }
-            deadline = Instant::now() + interval;
-        }
-    }
-}
-fn send_batch(client: &reqwest::blocking::Client, endpoint: &str, id: &str, events: &[Event]) {
-    // Keep event UUIDs and timestamps stable if the server accepted a request whose
-    // response was lost. PostHog can then deduplicate a retried event.
-    let body = payload(id, events);
-    if !deliver_batch(client, endpoint, &body, RETRY_DELAY) {
-        // Never log the request, installation ID, token or raw network error.
-        eprintln!("CNote: anonymous usage upload failed; batch dropped");
-    }
-}
-fn deliver_batch(
-    client: &reqwest::blocking::Client,
-    endpoint: &str,
-    body: &Value,
-    retry_delay: Duration,
-) -> bool {
-    for attempt in 0..MAX_ATTEMPTS {
-        match client.post(endpoint).json(body).send() {
-            Ok(response) if response.status().is_success() => return true,
-            Ok(response) => {
-                let status = response.status();
-                if status != reqwest::StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
-                    return false;
-                }
-            }
-            Err(_) => {}
-        }
-        if attempt + 1 < MAX_ATTEMPTS {
-            std::thread::sleep(retry_delay * (1 << attempt));
-        }
-    }
-    false
-}
-fn payload(id: &str, events: &[Event]) -> Value {
-    let batch: Vec<_> = events
-        .iter()
-        .map(|event| {
-            let mut props = json!({
-                "distinct_id": id, "app": "cnote", "platform": "macos",
-                "app_version": env!("CNOTE_APP_VERSION"), "os": std::env::consts::OS,
-                "architecture": std::env::consts::ARCH, "$process_person_profile": false
+fn sdk_event(id: &str, event: &Event) -> posthog_rs::Event {
+    let mut props = json!({
+        "app": "cnote", "platform": "macos",
+        "app_version": env!("CNOTE_APP_VERSION"), "os": std::env::consts::OS,
+        "architecture": std::env::consts::ARCH, "$process_person_profile": false
+    });
+    let name = match event {
+        Event::Started => "app_started",
+        Event::NoteCreated => "note_created",
+        Event::NoteDeleted => "note_deleted",
+        Event::Cloud {
+            operation,
+            outcome,
+            duration_ms,
+        } => {
+            props["operation"] = json!(match operation {
+                Operation::Restore => "restore",
+                Operation::Login => "login",
+                Operation::Logout => "logout",
+                Operation::List => "list",
+                Operation::Download => "download",
+                Operation::Upload => "upload",
+                Operation::Delete => "delete",
             });
-            let name = match event {
-                Event::Started => "app_started",
-                Event::NoteCreated => "note_created",
-                Event::NoteDeleted => "note_deleted",
-                Event::Cloud {
-                    operation,
-                    outcome,
-                    duration_ms,
-                } => {
-                    props["operation"] = json!(match operation {
-                        Operation::Restore => "restore",
-                        Operation::Login => "login",
-                        Operation::Logout => "logout",
-                        Operation::List => "list",
-                        Operation::Download => "download",
-                        Operation::Upload => "upload",
-                        Operation::Delete => "delete",
-                    });
-                    props["outcome"] = json!(match outcome {
-                        Outcome::Success => "success",
-                        Outcome::Failure => "failure",
-                        Outcome::Conflict => "conflict",
-                        Outcome::LoggedOut => "logged_out",
-                    });
-                    props["duration_ms"] = json!(duration_ms);
-                    match operation {
-                        Operation::Restore => "session_restored",
-                        Operation::Login => "login_completed",
-                        Operation::Logout => "logout_completed",
-                        _ => "sync_completed",
-                    }
-                }
-            };
-            json!({"uuid": uuid::Uuid::new_v4().to_string(), "event": name, "timestamp": timestamp(), "properties": props})
-        })
-        .collect();
-    json!({"api_key": PROJECT_TOKEN, "batch": batch})
-}
-fn timestamp() -> String {
-    let now: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
-    now.to_rfc3339()
+            props["outcome"] = json!(match outcome {
+                Outcome::Success => "success",
+                Outcome::Failure => "failure",
+                Outcome::Conflict => "conflict",
+                Outcome::LoggedOut => "logged_out",
+            });
+            props["duration_ms"] = json!(duration_ms);
+            match operation {
+                Operation::Restore => "session_restored",
+                Operation::Login => "login_completed",
+                Operation::Logout => "logout_completed",
+                _ => "sync_completed",
+            }
+        }
+    };
+    let mut event = posthog_rs::Event::new(name, id);
+    for (key, value) in props.as_object().expect("event properties are an object") {
+        event
+            .insert_prop(key, value)
+            .expect("JSON values are serializable");
+    }
+    event
 }
 fn installation_id(directory: &Path) -> String {
     let path = directory.join("analytics-id");
@@ -303,32 +219,33 @@ mod tests {
         assert!(TRACKER.get().is_none());
     }
     #[test]
-    fn batch_contract_has_only_allowlisted_properties() {
-        let body = payload(
-            "cnote:test",
-            &[
-                Event::Started,
-                Event::NoteCreated,
-                Event::NoteDeleted,
-                Event::Cloud {
-                    operation: Operation::Upload,
-                    outcome: Outcome::Conflict,
-                    duration_ms: 42,
-                },
-            ],
-        );
-        assert_eq!(body["api_key"], PROJECT_TOKEN);
-        let batch = body["batch"].as_array().unwrap();
-        assert_eq!(batch.len(), 4);
-        for event in batch {
-            let props = event["properties"].as_object().unwrap();
+    fn events_keep_anonymous_identity_and_only_allowlisted_app_properties() {
+        let events = [
+            Event::Started,
+            Event::NoteCreated,
+            Event::NoteDeleted,
+            Event::Cloud {
+                operation: Operation::Upload,
+                outcome: Outcome::Conflict,
+                duration_ms: 42,
+            },
+        ];
+        for (event, name) in events.iter().zip([
+            "app_started",
+            "note_created",
+            "note_deleted",
+            "sync_completed",
+        ]) {
+            let event = sdk_event("cnote:test", event);
+            assert_eq!(event.event_name(), name);
+            assert_eq!(event.distinct_id(), "cnote:test");
+            let props = event.properties();
             assert_eq!(props["app"], "cnote");
+            assert_eq!(props["platform"], "macos");
             assert_eq!(props["app_version"], env!("CNOTE_APP_VERSION"));
-            assert_eq!(props["distinct_id"], "cnote:test");
             assert_eq!(props["$process_person_profile"], false);
-            assert!(props.keys().all(|k| {
+            assert!(props.keys().all(|key| {
                 [
-                    "distinct_id",
                     "app",
                     "platform",
                     "app_version",
@@ -339,180 +256,103 @@ mod tests {
                     "outcome",
                     "duration_ms",
                 ]
-                .contains(&k.as_str())
+                .contains(&key.as_str())
             }));
         }
-        assert_eq!(batch[3]["event"], "sync_completed");
-        assert_eq!(batch[3]["properties"]["outcome"], "conflict");
+        let cloud = sdk_event("cnote:test", &events[3]);
+        assert_eq!(cloud.properties()["operation"], "upload");
+        assert_eq!(cloud.properties()["outcome"], "conflict");
+        assert_eq!(cloud.properties()["duration_ms"], 42);
     }
     #[test]
-    fn idle_partial_batch_is_delivered_and_flush_acknowledged() {
-        let (tx, rx) = mpsc::sync_channel(CAPACITY);
-        let (sent, delivered) = mpsc::channel();
-        let thread = std::thread::spawn(move || {
-            worker(rx, Duration::from_millis(20), |events| {
-                sent.send(payload("test", events)).unwrap();
-            })
-        });
-        tx.send(Message::Event(Event::Started)).unwrap();
-        let body = delivered.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert_eq!(body["batch"][0]["event"], "app_started");
-        tx.send(Message::Event(Event::NoteCreated)).unwrap();
-        let (done, wait) = mpsc::channel();
-        tx.send(Message::Flush(done)).unwrap();
-        wait.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert_eq!(
-            delivered.recv().unwrap()["batch"][0]["event"],
-            "note_created"
-        );
-        thread.join().unwrap();
-    }
-    #[test]
-    fn http_capture_delivers_a_valid_posthog_batch() {
-        use std::io::{BufRead, BufReader, Read, Write};
+    fn sdk_capture_drains_to_http_on_shutdown() {
+        use std::{
+            io::{BufRead, BufReader, Read, Write},
+            time::{Duration, Instant},
+        };
         let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = format!("http://{}/batch/", server.local_addr().unwrap());
+        server.set_nonblocking(true).unwrap();
+        let host = format!("http://{}", server.local_addr().unwrap());
         let received = std::thread::spawn(move || {
-            let (stream, _) = server.accept().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let stream = loop {
+                match server.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "SDK did not send queued event");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(e) => panic!("accept: {e}"),
+                }
+            };
             stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
+                .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             let mut reader = BufReader::new(stream);
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
             assert!(line.starts_with("POST /batch/ "));
             let mut length = None;
+            let mut sdk_user_agent = false;
             loop {
                 line.clear();
-                reader.read_line(&mut line).unwrap();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
                 if line == "\r\n" {
                     break;
                 }
-                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
                     length = Some(value.trim().parse::<usize>().unwrap());
                 }
+                sdk_user_agent |= lower.starts_with("user-agent: posthog-rs/");
             }
+            assert!(sdk_user_agent);
             let mut bytes = vec![0; length.unwrap()];
             reader.read_exact(&mut bytes).unwrap();
-            let body: Value = serde_json::from_slice(&bytes).unwrap();
-            reader
-                .get_mut()
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
-                .unwrap();
-            body
+            reader.get_mut().write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"Ok\"}").unwrap();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
         });
-        let client = reqwest::blocking::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(3))
-            .build()
-            .unwrap();
-        send_batch(&client, &address, "cnote:local-test", &[Event::Started]);
+        let client = posthog_rs::client(client_options().host(host).build().unwrap());
+        client.capture(sdk_event("cnote:local-test", &Event::Started));
+        client.shutdown();
         let body = received.join().unwrap();
         assert_eq!(body["api_key"], PROJECT_TOKEN);
-        assert_eq!(body["batch"][0]["properties"]["app"], "cnote");
-        assert_eq!(
-            body["batch"][0]["properties"]["distinct_id"],
-            "cnote:local-test"
-        );
+        assert_eq!(body["batch"].as_array().unwrap().len(), 1);
+        let event = &body["batch"][0];
+        assert_eq!(event["distinct_id"], "cnote:local-test");
+        assert_eq!(event["event"], "app_started");
+        assert_eq!(event["properties"]["app"], "cnote");
+        assert_eq!(event["properties"]["$process_person_profile"], false);
+        assert_ne!(event["properties"]["$is_server"], true);
+        assert_eq!(event["properties"]["$lib"], "posthog-rs");
+        assert!(uuid::Uuid::parse_str(event["uuid"].as_str().unwrap()).is_ok());
+        assert!(event["timestamp"].is_string());
     }
     #[test]
-    fn retries_transient_failures_with_stable_event_identity_and_stops_at_limit() {
-        use std::io::{BufRead, BufReader, Read, Write};
-        // Zero simulates a connection closing before an HTTP response arrives.
-        for (statuses, expected) in [
-            (vec![500, 200], true),
-            (vec![429, 200], true),
-            (vec![0, 200], true),
-            (vec![400], false),
-            (vec![302], false),
-            (vec![503; MAX_ATTEMPTS], false),
-        ] {
-            let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            server.set_nonblocking(true).unwrap();
-            let address = format!("http://{}/batch/", server.local_addr().unwrap());
-            let attempts = statuses.len();
-            let received = std::thread::spawn(move || {
-                let mut bodies = Vec::new();
-                for status in statuses {
-                    let deadline = Instant::now() + Duration::from_secs(3);
-                    let stream = loop {
-                        match server.accept() {
-                            Ok((stream, _)) => break stream,
-                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                assert!(Instant::now() < deadline, "missing retry");
-                                std::thread::sleep(Duration::from_millis(1));
-                            }
-                            Err(e) => panic!("accept: {e}"),
-                        }
-                    };
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(3)))
-                        .unwrap();
-                    let mut reader = BufReader::new(stream);
-                    let mut length = None;
-                    loop {
-                        let mut line = String::new();
-                        assert!(reader.read_line(&mut line).unwrap() > 0);
-                        if line == "\r\n" {
-                            break;
-                        }
-                        if let Some(value) =
-                            line.to_ascii_lowercase().strip_prefix("content-length:")
-                        {
-                            length = Some(value.trim().parse::<usize>().unwrap());
-                        }
-                    }
-                    let mut bytes = vec![0; length.unwrap()];
-                    reader.read_exact(&mut bytes).unwrap();
-                    bodies.push(serde_json::from_slice::<Value>(&bytes).unwrap());
-                    if status != 0 {
-                        write!(reader.get_mut(), "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
-                    }
-                }
-                bodies
-            });
-            let client = reqwest::blocking::Client::builder()
-                .no_proxy()
-                .connect_timeout(CONNECT_TIMEOUT)
-                .timeout(REQUEST_TIMEOUT)
-                .redirect(reqwest::redirect::Policy::none())
+    #[ignore = "sends a marked diagnostic event to the real PostHog project"]
+    fn live_sdk_capture() {
+        let failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = failed.clone();
+        let client = posthog_rs::client(
+            client_options()
+                .on_error(move |_| {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                })
                 .build()
-                .unwrap();
-            let body = payload("cnote:local-test", &[Event::Started]);
-            assert_eq!(
-                deliver_batch(&client, &address, &body, Duration::ZERO),
-                expected
-            );
-            let bodies = received.join().unwrap();
-            assert_eq!(bodies.len(), attempts);
-            assert!(bodies.iter().all(|received| received == &body));
-            assert!(uuid::Uuid::parse_str(body["batch"][0]["uuid"].as_str().unwrap()).is_ok());
-        }
-    }
-    #[test]
-    fn slow_upload_cannot_block_producers_and_queue_is_bounded() {
-        let (tx, rx) = mpsc::sync_channel(CAPACITY);
-        let (entered, wait) = mpsc::channel();
-        let (release, blocked) = mpsc::channel::<()>();
-        let thread = std::thread::spawn(move || {
-            worker(rx, Duration::from_secs(30), |_| {
-                let _ = entered.send(());
-                let _ = blocked.recv();
-            })
-        });
-        for _ in 0..BATCH_SIZE {
-            tx.try_send(Message::Event(Event::Started)).unwrap();
-        }
-        wait.recv_timeout(Duration::from_secs(2)).unwrap();
-        for _ in 0..CAPACITY {
-            tx.try_send(Message::Event(Event::Started)).unwrap();
-        }
-        assert!(matches!(
-            tx.try_send(Message::Event(Event::Started)),
-            Err(mpsc::TrySendError::Full(_))
-        ));
-        drop(tx);
-        drop(release);
-        thread.join().unwrap();
+                .unwrap(),
+        );
+        let id = format!("cnote:diagnostic:{}", uuid::Uuid::new_v4());
+        let mut event = sdk_event(&id, &Event::Started);
+        event.insert_prop("integration_test", true).unwrap();
+        event
+            .insert_prop("diagnostic", "official-sdk-migration")
+            .unwrap();
+        println!("PostHog diagnostic ID: {id}");
+        client.capture(event);
+        client.shutdown();
+        assert!(
+            !failed.load(std::sync::atomic::Ordering::SeqCst),
+            "SDK reported a delivery failure"
+        );
     }
 }
