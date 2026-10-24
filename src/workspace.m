@@ -1,6 +1,8 @@
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
 
+extern void cnote_theme_attach_menu(NSMenu *menu);
+
 static id workspaceMonitor;
 static void (*workspaceCallback)(unsigned int);
 static NSInteger workspaceIndex(NSEvent *event) {
@@ -104,6 +106,7 @@ static NSMenu *workspaceMoreMenu(void) {
         NSMenuItem *copy = [theme copy];
         // A detached popup has no main-menu responder-chain context.
         for (NSMenuItem *item in copy.submenu.itemArray) item.target = NSApp.delegate;
+        cnote_theme_attach_menu(copy.submenu);
         [menu addItem:copy];
     }
     NSMenuItem *update = [[NSApp.mainMenu itemWithTitle:@"窗口"].submenu itemWithTitle:@"检查更新…"];
@@ -119,11 +122,13 @@ void cnote_workspace_show_more_menu(void) {
     NSWindow *window = NSApp.mainWindow;
     if (!window) return;
     NSPoint location = [window.contentView convertPoint:window.mouseLocationOutsideOfEventStream fromView:nil];
-    // Run on the next Cocoa turn, after GPUI releases its mutable app borrow.
-    dispatch_async(dispatch_get_main_queue(), ^{
+    // Run outside GPUI and the main dispatch queue. Its queue must remain free
+    // to render live previews while AppKit runs the nested menu tracking loop.
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopDefaultMode, ^{
         if (!window.visible) return;
         [workspaceMoreMenu() popUpMenuPositioningItem:nil atLocation:location inView:window.contentView];
     });
+    CFRunLoopWakeUp(CFRunLoopGetMain());
 }
 // Exercise the copied menu's actual GPUI action without opening a blocking popup.
 void cnote_workspace_test_more_menu(void) {

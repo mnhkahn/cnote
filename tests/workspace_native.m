@@ -1,3 +1,4 @@
+#import "../src/theme.m"
 #import "../src/workspace.m"
 #include <assert.h>
 #import <WebKit/WebKit.h>

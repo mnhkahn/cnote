@@ -61,6 +61,7 @@ pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
         KeyBinding::new("cmd-z", Undo, None),
         KeyBinding::new("cmd-shift-z", Redo, None),
     ]);
+    crate::theme::install_preview(cx, window);
     set_menus(cx, Theme::System);
     // App-menu actions bubble while the active window is borrowed by GPUI.
     // Defer accessing it until the dispatch has released that borrow.
@@ -320,4 +321,5 @@ pub fn set_menus(cx: &mut App, theme: Theme) {
         ]),
         Menu::new("窗口").items([MenuItem::action("检查更新…", CheckUpdates)]),
     ]);
+    crate::theme::refresh_menu();
 }

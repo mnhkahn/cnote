@@ -142,6 +142,49 @@ impl Theme {
     }
 }
 
+// AppKit invokes previews on the main run loop, outside GPUI's mutable update.
+// Avoid the main dispatch queue: a native popup can run a nested tracking loop.
+type PreviewContext = (gpui::WindowHandle<crate::ui::Notebook>, gpui::AsyncApp);
+thread_local! {
+    static PREVIEW_CONTEXT: std::cell::RefCell<Option<PreviewContext>> = const { std::cell::RefCell::new(None) };
+}
+unsafe extern "C" {
+    fn cnote_theme_install(labels: *const std::ffi::c_char, callback: extern "C" fn(i32));
+    fn cnote_theme_refresh_menu();
+    fn cnote_theme_test_preview(index: i32, copied: i32);
+}
+extern "C" fn preview(index: i32) {
+    let context = PREVIEW_CONTEXT.with(|context| context.borrow().clone());
+    if let Some((window, mut cx)) = context {
+        let theme = usize::try_from(index)
+            .ok()
+            .and_then(|index| Theme::ALL.get(index))
+            .copied();
+        let _ = window.update(&mut cx, |notebook, _, cx| notebook.preview_theme(theme, cx));
+    }
+}
+pub fn install_preview(cx: &mut gpui::App, window: gpui::WindowHandle<crate::ui::Notebook>) {
+    PREVIEW_CONTEXT.with(|context| *context.borrow_mut() = Some((window, cx.to_async())));
+    let labels: Vec<_> = Theme::ALL.into_iter().map(Theme::label).collect();
+    let labels = std::ffi::CString::new(serde_json::to_string(&labels).unwrap()).unwrap();
+    unsafe {
+        cnote_theme_install(labels.as_ptr(), preview);
+    }
+}
+pub fn refresh_menu() {
+    unsafe {
+        cnote_theme_refresh_menu();
+    }
+}
+pub fn test_preview(theme: Option<Theme>, copied: bool) {
+    let index = theme
+        .map(|theme| Theme::ALL.iter().position(|item| *item == theme).unwrap() as i32)
+        .unwrap_or(-1);
+    unsafe {
+        cnote_theme_test_preview(index, i32::from(copied));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

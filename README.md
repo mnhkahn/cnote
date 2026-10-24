@@ -13,7 +13,7 @@ sh scripts/package.sh release    # 优化后的应用包
 open dist/CNote.app
 ```
 
-- 原生 GPUI 窗口、虚拟化笔记列表、支持顶栏“⋯”或“视图 → 主题”选择 20 种配色（浅色、深色、暖纸、樱花、薄荷、薰衣草、沙丘、冰川、日光、象牙、晴空、极夜、森林、德古拉、莫诺凯、午夜、深海、复古、暮光、石墨）或跟随系统，并记住偏好，窗口与编辑器同步切换、侧边栏折叠和专注模式。列表名称使用正文第一个非空标题，保存或下载内容后更新；没有正文标题时使用原笔记名称。
+- 原生 GPUI 窗口、虚拟化笔记列表、支持顶栏“⋯”或“视图 → 主题”选择 20 种配色（浅色、深色、暖纸、樱花、薄荷、薰衣草、沙丘、冰川、日光、象牙、晴空、极夜、森林、德古拉、莫诺凯、午夜、深海、复古、暮光、石墨）或跟随系统；鼠标悬停主题名称即时预览，点击后记住偏好，移出主题列表或取消菜单恢复原主题，窗口与编辑器同步切换、侧边栏折叠和专注模式。列表名称使用正文第一个非空标题，保存或下载内容后更新；没有正文标题时使用原笔记名称。
 - 顶栏固定工作区 Tab：`⌘1` 笔记、`⌘2` 文本处理（JSONPack）、`⌘3` Diff、`⌘4` CSV。工具页完全隐藏左侧栏，使用全部内容宽度；可点击顶栏 Tab、通过快捷键或“视图”菜单切换工作区，切回笔记时恢复原侧栏状态。三个工具均为本地实现，在同一个内嵌编辑区域内切换；不嵌套在线页面、不下载运行时代码。Cocoa 原生事件监视器在 WKWebView / Ace 获得焦点时也处理快捷键，菜单“视图”保留对应入口。
 - 富文本：粗体、斜体、下划线、删除线、代码、三级标题、有序/无序列表、缩进、撤销/重做、清除格式。
 - Markdown 快捷输入：行首 `#`、`##`、`###`、`-`、`*`、`1.`、`>`、`[]`、`[ ]` 后按空格。
@@ -134,7 +134,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 sh scripts/test-updater.sh
 sh scripts/test-shortcuts.sh
-CNOTE_NATIVE_UI_TESTS=1 sh scripts/test-shortcuts.sh # 真实 WKWebView 编辑快捷键、方向键和 Shift 选择（需要图形会话）
+CNOTE_NATIVE_UI_TESTS=1 sh scripts/test-shortcuts.sh # 真实菜单悬停预览、WKWebView 编辑快捷键、方向键和 Shift 选择（需要图形会话）
 python3 -m unittest discover -s tests -p 'test_*.py'
 npm ci
 npm run check:tools

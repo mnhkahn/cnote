@@ -26,6 +26,8 @@ pub struct Notebook {
     authenticated: bool,
     sidebar: bool,
     theme: Theme,
+    theme_preview: Option<Theme>,
+    smoke_theme_step: Option<usize>,
     context_menu: Option<(String, Point<Pixels>)>,
     workspace: Workspace,
     note_dirty: bool,
@@ -182,6 +184,8 @@ impl Notebook {
             authenticated: false,
             sidebar: true,
             theme: Theme::System,
+            theme_preview: None,
+            smoke_theme_step: None,
             context_menu: None,
             workspace: Workspace::Notes,
             note_dirty: false,
@@ -196,14 +200,32 @@ impl Notebook {
             _subscriptions: vec![quit, activation, appearance],
         }
     }
-    fn apply_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
-        self.theme = theme;
+    fn show_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         cx.set_window_appearance(theme.appearance());
-        crate::menus::set_menus(cx, theme);
         if self.ready {
             self.js(&format!("cnoteTheme.set({})", json!(theme.as_str())));
         }
         cx.notify();
+    }
+    fn apply_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        self.theme_preview = None;
+        self.show_theme(theme, cx);
+        crate::menus::set_menus(cx, theme);
+    }
+    pub fn preview_theme(&mut self, theme: Option<Theme>, cx: &mut Context<Self>) {
+        if self.theme_preview != theme {
+            self.theme_preview = theme;
+            self.show_theme(theme.unwrap_or(self.theme), cx);
+        }
+        if smoke() && self.smoke_theme_step.is_some() {
+            self.js("setTimeout(()=>window.ipc.postMessage(JSON.stringify({type:'native_theme_preview_smoke',theme:document.documentElement.dataset.theme,bg:getComputedStyle(document.body).backgroundColor,html:document.getElementById('editor').innerHTML})),100)");
+        }
+    }
+    fn smoke_preview(&self) {
+        let step = self.smoke_theme_step.unwrap();
+        let cycle = Theme::ALL.len() + 1;
+        crate::theme::test_preview(Theme::ALL.get(step % cycle).copied(), step >= cycle);
     }
     pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
         self.apply_theme(theme, cx);
@@ -356,9 +378,37 @@ impl Notebook {
                 );
                 eprintln!("CNOTE_SMOKE_TITLEBAR_OK");
                 eprintln!("CNOTE_SMOKE_NOTE_NAVIGATION_OK");
-                self.js("document.getElementById('editor').innerHTML='<p>Native WebKit → IPC → SQLite ✓</p>';document.getElementById('editor').dispatchEvent(new Event('input',{bubbles:true}))");
-                self.switch_workspace(Workspace::Csv, window, cx);
-                self.js("cnote.action('close')");
+                self.smoke_theme_step = Some(0);
+                self.smoke_preview();
+            }
+            "native_theme_preview_smoke" if smoke() => {
+                let step = self.smoke_theme_step.expect("theme preview test active");
+                let cycle = Theme::ALL.len() + 1;
+                let preview = Theme::ALL.get(step % cycle).copied();
+                assert_eq!(
+                    self.theme,
+                    Theme::Dark,
+                    "Hover must not change the saved theme"
+                );
+                assert_eq!(self.theme_preview, preview);
+                let palette = preview.unwrap_or(self.theme).palette(window.appearance());
+                assert_eq!(v["theme"], palette.id);
+                let bg = palette.rgb(&palette.bg);
+                assert_eq!(
+                    v["bg"],
+                    format!("rgb({}, {}, {})", bg >> 16, (bg >> 8) & 255, bg & 255)
+                );
+                assert_eq!(v["html"], "<p>first</p><p>second</p><p>third</p>");
+                if step + 1 < cycle * 2 {
+                    self.smoke_theme_step = Some(step + 1);
+                    self.smoke_preview();
+                } else {
+                    self.smoke_theme_step = None;
+                    eprintln!("CNOTE_SMOKE_THEME_PREVIEW_OK");
+                    self.js("document.getElementById('editor').innerHTML='<p>Native WebKit → IPC → SQLite ✓</p>';document.getElementById('editor').dispatchEvent(new Event('input',{bubbles:true}))");
+                    self.switch_workspace(Workspace::Csv, window, cx);
+                    self.js("cnote.action('close')");
+                }
             }
             "native_tool_smoke" if smoke() => {
                 self.verify_smoke_layout();
@@ -627,7 +677,10 @@ impl Notebook {
 }
 impl Render for Notebook {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = self.theme.palette(window.appearance());
+        let palette = self
+            .theme_preview
+            .unwrap_or(self.theme)
+            .palette(window.appearance());
         let (bg, sidebar, ink, muted, line, active, accent) = (
             palette.rgb(&palette.bg),
             palette.rgb(&palette.sidebar),

@@ -15,10 +15,12 @@ fn main() {
     println!("cargo:rustc-env=CNOTE_APP_VERSION={version}");
     println!("cargo:rerun-if-changed=src/updater.m");
     println!("cargo:rerun-if-changed=src/workspace.m");
+    println!("cargo:rerun-if-changed=src/theme.m");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()
             .file("src/updater.m")
             .file("src/workspace.m")
+            .file("src/theme.m")
             .flag("-fobjc-arc")
             .flag("-fblocks")
             .compile("cnote_updater");
