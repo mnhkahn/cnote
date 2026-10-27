@@ -1168,14 +1168,14 @@ mod tests {
         assert!(resolved.dirty && !resolved.conflict);
         let mut acknowledged = false;
         while let Ok(event) = receiver.try_recv() {
-            if let Event::Dialog { kind, data } = event {
-                if kind == "conflict_result" {
-                    assert_eq!(data["ok"], true);
-                    assert_eq!(data["html"], resolved.html);
-                    assert_eq!(data["choice"], "merge");
-                    assert_eq!(data["pending_sync"], true);
-                    acknowledged = true;
-                }
+            if let Event::Dialog { kind, data } = event
+                && kind == "conflict_result"
+            {
+                assert_eq!(data["ok"], true);
+                assert_eq!(data["html"], resolved.html);
+                assert_eq!(data["choice"], "merge");
+                assert_eq!(data["pending_sync"], true);
+                acknowledged = true;
             }
         }
         assert!(acknowledged);
