@@ -267,26 +267,6 @@ impl Store {
         Ok(n)
     }
 }
-/// Linear, allocation-free protection against accidental large replacement/deletion.
-pub fn large_change(old: &str, new: &str) -> bool {
-    if old.len() < 200 {
-        return false;
-    }
-    let prefix = old
-        .bytes()
-        .zip(new.bytes())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let suffix = old.as_bytes()[prefix..]
-        .iter()
-        .rev()
-        .zip(new.as_bytes()[prefix..].iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let changed = old.len().max(new.len()) - prefix - suffix;
-    changed as f64 / old.len().max(new.len()) as f64 > 0.65
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,14 +352,6 @@ mod tests {
         n.deleted = true;
         s.put(&n).unwrap();
         assert!(s.uploaded(&sent, "id", "tag", "a").unwrap().dirty);
-    }
-    #[test]
-    fn replacement_guard() {
-        let old = "a".repeat(1000);
-        assert!(large_change(&old, ""));
-        assert!(large_change(&old, &"b".repeat(1000)));
-        assert!(!large_change(&old, &format!("{}tail", old)));
-        assert!(!large_change("短笔记", "完全修改"));
     }
     #[test]
     fn reject_path_names() {

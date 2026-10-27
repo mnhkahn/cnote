@@ -399,7 +399,6 @@
     const d=e.data;
     if(e.kind==='login_done'){window.loginFinished=true;if(dialogKind==='login')dialog.close();return;}
     if(e.kind==='login'){window.loginFinished=false;const code=text('div',d.code);code.className='login-code';modal('login','连接 OneDrive',[text('p','在浏览器中登录 Microsoft 账号，并输入以下设备码。'),code],[['取消登录',()=>post({type:'logout'})],['打开 Microsoft 登录',()=>{post({type:'link',url:d.url});return false;},'primary']]);post({type:'link',url:d.url});}
-    if(e.kind==='large_change')modal('large_change','内容变动较大',[text('p',`“${d.title}”的大部分内容已被替换或删除。本地草稿已经保存，是否将修改同步到 OneDrive？`)],[['暂不同步',()=>{}],['确认同步',()=>post({type:'approve',id:d.id,revision:d.revision}),'primary']]);
     if(e.kind==='conflict_result'){if(pendingConflictResult?.id===d.id)pendingConflictResult.receive(d);return;}
     if(e.kind==='conflict')conflictDialog(d);
     if(e.kind==='conflict_view')showConflict(d);

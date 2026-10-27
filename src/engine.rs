@@ -108,9 +108,7 @@ struct Engine {
     status: String,
     inflight: HashSet<String>,
     cloud: HashMap<String, (String, String)>,
-    approved: HashMap<String, i64>,
     retry: HashMap<String, Instant>,
-    asked: HashSet<(String, i64)>,
     next_sync: Instant,
     warm_queue: VecDeque<String>,
     warmed: HashSet<String>,
@@ -337,18 +335,6 @@ impl Engine {
             {
                 continue;
             }
-            if !n.deleted
-                && store::large_change(&n.baseline, &n.html)
-                && self.approved.get(&n.id) != Some(&n.revision)
-            {
-                if self.asked.insert((n.id.clone(), n.revision)) {
-                    self.emit(Event::Dialog {
-                        kind: "large_change".into(),
-                        data: json!({"id":n.id,"title":n.title,"revision":n.revision}),
-                    });
-                }
-                continue;
-            }
             if n.account.is_empty() {
                 n.account = self.account.clone();
                 self.db.put(&n)?;
@@ -520,8 +506,6 @@ impl Engine {
                 self.name.clear();
                 self.inflight.clear();
                 self.cloud.clear();
-                self.approved.clear();
-                self.asked.clear();
                 self.selected = None;
                 self.db.set_setting("account", "")?;
                 self.db.set_setting("name", "")?;
@@ -566,17 +550,6 @@ impl Engine {
                 }
                 self.state()?;
                 self.next_sync = Instant::now();
-            }
-            "approve" => {
-                let n = self.db.get(id)?;
-                anyhow::ensure!(
-                    n.account.is_empty() || n.account == self.account,
-                    "账号已切换，请重新打开笔记"
-                );
-                if v["revision"].as_i64() == Some(n.revision) {
-                    self.approved.insert(id.into(), n.revision);
-                    self.next_sync = Instant::now();
-                }
             }
             "conflict_view" => {
                 let n = self.db.get(id)?;
@@ -644,9 +617,6 @@ impl Engine {
                     }
                     self.db.put(&n)?;
                     self.cloud.remove(id);
-                    if n.dirty {
-                        self.approved.insert(id.into(), n.revision);
-                    }
                     let result = json!({"id":n.id,"ok":true,"choice":choice,"html":n.html,"pending_sync":n.dirty});
                     if self.selected.as_deref() == Some(id) {
                         self.emit(Event::Load {
@@ -932,9 +902,7 @@ pub fn start(path: PathBuf) -> Handle {
                 status: "离线模式 · 笔记保存在本机".into(),
                 inflight: HashSet::new(),
                 cloud: HashMap::new(),
-                approved: HashMap::new(),
                 retry: HashMap::new(),
-                asked: HashSet::new(),
                 next_sync: Instant::now(),
                 warm_queue: VecDeque::new(),
                 warmed: HashSet::new(),
@@ -1003,9 +971,7 @@ mod tests {
             status: String::new(),
             inflight: HashSet::new(),
             cloud: HashMap::new(),
-            approved: HashMap::new(),
             retry: HashMap::new(),
-            asked: HashSet::new(),
             next_sync: Instant::now(),
             warm_queue: VecDeque::new(),
             warmed: HashSet::new(),
@@ -1113,6 +1079,64 @@ mod tests {
         assert_eq!(e.db.get(&n.id).unwrap().html, "<h1>durable</h1>");
     }
     #[test]
+    fn large_replacements_and_empty_notes_sync_without_confirmation() {
+        for html in [String::new(), "<p>replacement</p>".repeat(100)] {
+            let mut e = engine();
+            let (tx, jobs) = mpsc::channel();
+            let (events, dialogs) = async_channel::unbounded();
+            e.tx = tx;
+            e.events = events;
+            e.authenticated = true;
+            let mut n = e.db.create("Note", "alice").unwrap();
+            n.remote_id = Some("remote".into());
+            n.etag = Some("reviewed-version".into());
+            n.baseline = "old content".repeat(100);
+            n.html = html.clone();
+            e.db.put(&n).unwrap();
+            e.sync().unwrap();
+            let (_, Job::Put(sent)) = jobs.try_recv().unwrap() else {
+                panic!("expected upload")
+            };
+            assert_eq!(sent.html, html);
+            assert_eq!(sent.etag.as_deref(), Some("reviewed-version"));
+            assert!(dialogs.try_recv().is_err());
+        }
+    }
+    #[test]
+    fn cloud_conflict_keeps_latest_local_edit_and_blocks_upload_until_resolution() {
+        let mut e = engine();
+        let (tx, jobs) = mpsc::channel();
+        let (events, dialogs) = async_channel::unbounded();
+        e.tx = tx;
+        e.events = events;
+        e.authenticated = true;
+        let mut n = e.db.create("Note", "alice").unwrap();
+        n.remote_id = Some("remote".into());
+        n.etag = Some("old-version".into());
+        n.html = "local before upload".into();
+        e.db.put(&n).unwrap();
+        e.db.edit(&n.id, "latest local edit").unwrap();
+        e.network(
+            0,
+            Reply::Conflict {
+                sent: n.clone(),
+                html: "new cloud edit".into(),
+                etag: "new-version".into(),
+            },
+        )
+        .unwrap();
+        let local = e.db.get(&n.id).unwrap();
+        assert_eq!(local.html, "latest local edit");
+        assert!(local.dirty && local.conflict);
+        assert_eq!(e.cloud.get(&n.id).unwrap().0, "new cloud edit");
+        assert!(
+            matches!(dialogs.try_recv().unwrap(), Event::Dialog { kind, .. } if kind == "conflict")
+        );
+        e.next_sync = Instant::now();
+        e.sync().unwrap();
+        assert!(jobs.try_recv().is_err());
+    }
+    #[test]
     fn conflict_resolution_uses_latest_local_text() {
         let mut e = engine();
         let n = e.db.create("Note", "alice").unwrap();
@@ -1142,7 +1166,6 @@ mod tests {
         assert_eq!(resolved.etag.as_deref(), Some("tag"));
         assert_eq!(resolved.revision, n.revision + 1);
         assert!(resolved.dirty && !resolved.conflict);
-        assert_eq!(e.approved.get(&n.id), Some(&resolved.revision));
         let mut acknowledged = false;
         while let Ok(event) = receiver.try_recv() {
             if let Event::Dialog { kind, data } = event {
