@@ -1,6 +1,22 @@
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
 
+int cnote_copy_image(const unsigned char *bytes, size_t length, const char *html) {
+    if (![NSThread isMainThread] || !bytes || !length || !html) return 0;
+    NSData *data = [NSData dataWithBytes:bytes length:length];
+    NSImage *image = [[NSImage alloc] initWithData:data];
+    if (!image) return 0;
+    NSBitmapImageRep *bitmap = [NSBitmapImageRep imageRepWithData:image.TIFFRepresentation];
+    NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    NSString *markup = [NSString stringWithUTF8String:html];
+    if (!png || !markup) return 0;
+    NSPasteboardItem *item = [[NSPasteboardItem alloc] init];
+    [item setData:png forType:NSPasteboardTypePNG];
+    [item setString:markup forType:NSPasteboardTypeHTML];
+    [NSPasteboard.generalPasteboard clearContents];
+    return [NSPasteboard.generalPasteboard writeObjects:@[item]] ? 1 : 0;
+}
+
 extern void cnote_theme_attach_menu(NSMenu *menu);
 
 static id workspaceMonitor;

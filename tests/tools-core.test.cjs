@@ -101,3 +101,37 @@ test('Excel round trip keeps Unicode, quoted strings, empty cells and formula te
 test('table rejects dimensions that would create excessive DOM or memory usage',()=>{
  assert.throws(()=>c.normalize([Array(2049).fill('x')]));
 });
+
+test('note diff preserves exact HTML including whitespace, tables, images and format-only changes',()=>{
+ for(const [left,right] of [
+  ['<p><b>相同文字</b></p>','<p><i>相同文字</i></p>'],
+  ['<table><tr><td>A</td></tr></table>\n<img src="data:image/png;base64,abc">','<table><tr><td>B</td></tr></table>\n<img src="data:image/png;base64,abc">'],
+  ['', '<p>新增</p>'], ['<pre> a\n b </pre>','<pre> a\n c </pre>'],
+  ['<p>A</p>\r\n<p>B</p>','<p>A</p>\r\n<p>C</p>']
+ ]){
+  const parts=c.noteCompare({left,right});
+  assert.equal(parts.filter(p=>p.kind!=='added').map(p=>p.html).join(''),left);
+  assert.equal(parts.filter(p=>p.kind!=='removed').map(p=>p.html).join(''),right);
+  assert(parts.some(p=>p.kind!=='same'));
+ }
+});
+
+test('smart decode follows the website order and restores nested UTF-8 encodings',()=>{
+ const cased=[
+  ['JUU0JUJEJUEwJUU1JUE1JUJE','你好',['Base64','URL 编码']],
+  ['%5Cu4f60%5Cu597d','你好',['URL 编码','Unicode 转义']],
+  ['\\uD83D\\uDE00','😀',['Unicode 转义']],
+  ['&amp;lt;tag&amp;gt;','<tag>',['HTML 实体','HTML 实体']],
+  ['&copy; &#x1F600;','© 😀',['HTML 实体']],
+  ['JBSWY3DP','Hello',['Base32']],
+  ['48656c6c6f','Hello',['Hex 十六进制']],
+  ['8J-YgA','😀',['Base64']]
+ ];
+ for(const [text,result,layers]of cased){const d=c.smartDecode({text});assert.equal(d.result,result);assert.deepEqual(d.layers,layers);assert.equal(c.format(text,'smartdecode'),result);assert.equal(d.steps.at(-1).value,result);}
+});
+test('smart decode preserves unrecognized, invalid UTF-8 and binary data and bounds recursion',()=>{
+ for(const text of ['ordinary text','%invalid','AA==','_w==','ff','&unknown;','']){const d=c.smartDecode({text});assert.equal(d.result,text);assert.deepEqual(d.layers,[]);}
+ let text='你好';for(let i=0;i<24;i++)text=encodeURIComponent(text);
+ const d=c.smartDecode({text});assert.equal(d.layers.length,20);assert.equal(d.limited,true);assert.notEqual(d.result,'你好');assert.equal(c.smartDecode({text:d.result}).result,'你好');
+ const large='Hello '.repeat(4000);const bounded=c.smartDecode({text:Buffer.from(large).toString('base64')});assert.equal(bounded.result,large);assert.equal(bounded.steps[0].value.length,20000);assert.equal(bounded.steps[0].truncated,true);
+});

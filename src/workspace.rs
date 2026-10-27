@@ -69,6 +69,22 @@ pub const SHORTCUT_SCRIPT: &str = include_str!("../editor/workspace.js");
 mod tests {
     use super::*;
     #[test]
+    fn clipboard_image_data_is_bounded_and_local_urls_are_rejected() {
+        assert_eq!(
+            image_bytes("data:image/png;base64,aGVsbG8=").unwrap(),
+            b"hello"
+        );
+        for source in [
+            "data:image/png;base64,",
+            "data:image/png;base64,invalid!",
+            "data:image/png,hello",
+            "file:///tmp/image.png",
+            "http://example.com/image.png",
+        ] {
+            assert!(image_bytes(source).is_err(), "{source}");
+        }
+    }
+    #[test]
     fn shortcuts_map_to_local_workspaces() {
         for page in Workspace::ALL {
             assert_eq!(
@@ -127,11 +143,62 @@ mod tests {
 static SHORTCUTS: std::sync::OnceLock<async_channel::Sender<Workspace>> =
     std::sync::OnceLock::new();
 unsafe extern "C" {
+    fn cnote_copy_image(
+        bytes: *const u8,
+        length: usize,
+        html: *const std::ffi::c_char,
+    ) -> std::ffi::c_int;
     fn cnote_workspace_install(callback: extern "C" fn(u32)) -> std::ffi::c_int;
     fn cnote_workspace_test_key(index: u32);
     fn cnote_workspace_show_more_menu();
     fn cnote_workspace_test_more_menu();
     fn cnote_workspace_test_navigation(index: u32, shift: std::ffi::c_int);
+}
+pub fn copy_image(bytes: &[u8], html: &str) -> anyhow::Result<()> {
+    let html = std::ffi::CString::new(html)?;
+    anyhow::ensure!(
+        unsafe { cnote_copy_image(bytes.as_ptr(), bytes.len(), html.as_ptr()) } != 0,
+        "无法解码图片或写入系统剪贴板"
+    );
+    Ok(())
+}
+
+/// Download off the UI thread. Both embedded images and HTTPS images use the same clipboard path.
+pub fn image_bytes(source: &str) -> anyhow::Result<Vec<u8>> {
+    use base64::Engine;
+    use std::io::Read;
+    const LIMIT: usize = 20 * 1024 * 1024;
+    if source.starts_with("data:image/") {
+        let (header, data) = source
+            .split_once(',')
+            .ok_or_else(|| anyhow::anyhow!("图片数据格式错误"))?;
+        anyhow::ensure!(
+            header.ends_with(";base64") && data.len() <= LIMIT * 4 / 3 + 4,
+            "图片数据格式错误或超过 20 MB"
+        );
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
+        anyhow::ensure!(
+            !bytes.is_empty() && bytes.len() <= LIMIT,
+            "图片为空或超过 20 MB"
+        );
+        return Ok(bytes);
+    }
+    let url = url::Url::parse(source)?;
+    anyhow::ensure!(url.scheme() == "https", "图片地址必须使用 HTTPS");
+    let response = reqwest::blocking::Client::builder()
+        .https_only(true)
+        .timeout(std::time::Duration::from_secs(20))
+        .build()?
+        .get(url)
+        .send()?
+        .error_for_status()?;
+    let mut bytes = Vec::new();
+    response.take((LIMIT + 1) as u64).read_to_end(&mut bytes)?;
+    anyhow::ensure!(
+        !bytes.is_empty() && bytes.len() <= LIMIT,
+        "图片为空或超过 20 MB"
+    );
+    Ok(bytes)
 }
 extern "C" fn shortcut(index: u32) {
     if let Some(page) = Workspace::ALL.get(index as usize)
@@ -172,8 +239,8 @@ pub fn smoke_script(page: Workspace) -> String {
     let (ready, action, result) = match page {
         Workspace::Text => (
             "document.querySelector('#tool-text-editor .ace_text-input')",
-            "ace.edit('tool-text-editor').setValue('{\"id\":9007199254740993123}',-1);document.querySelector('[data-text-op=format]').click();",
-            "cnoteTools.state.text.includes('\\n')&&cnoteTools.state.text.includes('9007199254740993123')",
+            "ace.edit('tool-text-editor').setValue('{\"id\":9007199254740993123}',-1);document.getElementById('text-preview').click();",
+            "(()=>{const apply=document.getElementById('text-apply');if(!apply.disabled)apply.click();return cnoteTools.state.text.includes('\\n')&&cnoteTools.state.text.includes('9007199254740993123');})()",
         ),
         Workspace::Diff => (
             "document.querySelector('#tool-diff-right .ace_text-input')",

@@ -1,9 +1,33 @@
 <section id="local-tools" hidden aria-label="本地工具">
  <section id="text-tool" class="tool-page" hidden>
-  <div class="tool-toolbar"><strong>文本处理</strong><select id="text-mode" aria-label="格式"><option value="auto">自动识别</option><option value="json">JSON</option><option value="xml">XML</option><option value="sql">SQL</option><option value="ai-text">AI 文本</option><option value="text">纯文本</option></select><button data-text-op="format" class="primary">格式化</button><button data-text-op="compact">压缩 JSON</button><button data-text-op="trim-empty">去空行</button><button data-text-op="join">合并换行</button><button data-text-op="sort">排序</button><button data-text-op="unique">排序去重</button><button id="text-copy">复制</button></div>
-  <div class="tool-toolbar"><input id="text-pattern" placeholder="正则表达式 / 要删除或替换的字符" aria-label="过滤或替换内容"><button data-text-op="filter">按行过滤</button><button data-text-op="remove">删除字符</button><button data-text-op="newline">替换为换行</button><input id="text-delimiter" value="," aria-label="分隔符" class="short"><input id="text-field" type="number" value="1" min="1" aria-label="列号" class="short"><button data-text-op="cut">提取列</button></div>
-  <div id="tool-text-editor" class="tool-code" aria-label="文本处理编辑器"></div>
-  <div class="tool-help">⌘Z 撤销 · Option 拖动进行列选择 · 所有处理均在本机完成</div>
+  <div class="text-heading"><div><h1>文本处理</h1><p>粘贴原文，选择处理方式，预览满意后再应用。</p></div><span class="text-local"><i class="bi bi-laptop"></i> 本机处理 · 自动保存原文</span></div>
+  <div class="text-workbench">
+   <aside class="text-settings" aria-label="处理设置">
+    <label for="text-operation">处理方式</label>
+    <select id="text-operation">
+     <optgroup label="格式整理"><option value="format">格式化文本</option><option value="compact">压缩 JSON</option></optgroup>
+     <optgroup label="按行整理"><option value="trim-empty">去除空行</option><option value="join">合并所有换行</option><option value="sort">按行排序</option><option value="unique">排序并去重</option></optgroup>
+     <optgroup label="查找与替换"><option value="filter">保留匹配的行</option><option value="remove">删除指定文本</option><option value="newline">指定文本替换为换行</option></optgroup>
+     <optgroup label="提取内容"><option value="cut">按分隔符提取列</option></optgroup>
+    </select>
+    <p id="text-description"></p>
+    <div id="text-format-settings" class="text-setting"><label for="text-mode">文本类型</label><select id="text-mode"><option value="auto">自动识别</option><option value="json">JSON</option><option value="xml">XML</option><option value="sql">SQL</option><option value="ai-text">AI 文本（修复断行）</option><option value="smartdecode">智能解码（自动识别多层编码）</option><option value="text">纯文本（保持原样）</option></select></div>
+    <div id="text-pattern-settings" class="text-setting" hidden><label for="text-pattern" id="text-pattern-label">查找内容</label><input id="text-pattern" aria-describedby="text-pattern-help"><p id="text-pattern-help"></p></div>
+    <div id="text-column-settings" class="text-setting" hidden><label for="text-delimiter">分隔符</label><input id="text-delimiter" value=","><label for="text-field">提取第几列</label><input id="text-field" type="number" value="1" min="1"><p>列号从 1 开始。某行不足指定列数时，保留该行原文。复杂 CSV 请使用“表格”工具。</p></div>
+    <div class="text-example"><strong>使用示例</strong><span>处理前</span><pre id="text-example-before"></pre><span>处理后</span><pre id="text-example-after"></pre><button id="text-example-load" type="button">填入示例</button></div>
+    <button id="text-preview" class="primary">预览处理结果</button><p class="text-preview-hint">先预览，再决定是否替换原文。</p>
+   </aside>
+   <div class="text-content">
+    <div class="text-display-controls"><label><input id="text-show-whitespace" type="checkbox"> 显示空白标记</label><span>空格 · / Tab →；仅改变显示，不改变文本</span></div>
+    <div class="text-panes">
+     <section class="text-pane" aria-label="原文区域"><div class="text-pane-heading"><strong>原文</strong><span id="text-input-count"></span><button id="text-undo" title="撤销对原文的修改">撤销</button><button id="text-copy">复制原文</button></div><div class="text-editor-wrap"><div id="tool-text-editor" class="tool-code" aria-label="文本处理编辑器"></div><div id="text-input-placeholder" class="text-placeholder"><strong>从这里开始</strong><p>粘贴要处理的文本<br>也可以在左侧填入示例试用</p></div></div></section>
+     <section class="text-pane" aria-label="结果区域"><div class="text-pane-heading"><strong>结果预览</strong><span id="text-output-count"></span><button id="text-copy-result" disabled>复制结果</button></div><div class="text-editor-wrap"><div id="tool-text-result" class="tool-code" aria-label="处理结果（只读）"></div><div id="text-result-placeholder" class="text-placeholder"><strong>处理结果会显示在这里</strong><p>选择左侧的处理方式，然后点击<br>“预览处理结果”</p></div></div></section>
+    </div>
+    <div class="text-result-bar"><p id="text-feedback" role="status">原文会一直保留，预览不会修改原文。</p><button id="text-apply" class="primary" disabled>应用到原文</button></div>
+    <div id="text-decode-layers" aria-label="解码过程"></div>
+    <div class="tool-help">⌘Z 撤销原文修改 · Option 拖动进行列选择 · 预览结果仅保留在本次会话中</div>
+   </div>
+  </div>
  </section>
  <section id="diff-tool" class="tool-page" hidden>
   <div class="tool-toolbar"><strong>文本对比</strong><button id="diff-run" class="primary">对比</button><button data-diff-op="sort">两侧排序</button><button data-diff-op="unique">排序去重</button><button data-diff-op="format">两侧格式化</button><button id="diff-copy-removed">复制删除内容</button><button id="diff-copy-added">复制新增内容</button><span id="diff-count"></span></div>

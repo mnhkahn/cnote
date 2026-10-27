@@ -1,5 +1,6 @@
 'use strict';
-const {diffLines}=require('diff');
+const {diffLines,diffArrays}=require('diff');
+const {EntityDecoder,ALL_ENTITIES}=require('@nodable/entities');
 const {zipSync,unzipSync,strToU8,strFromU8}=require('fflate');
 const {XMLParser,XMLValidator}=require('fast-xml-parser');
 const sqlFormatter=require('sql-formatter');
@@ -61,7 +62,7 @@ function formatAIText(content) {
 }
 
 function format(source,mode='auto'){
- check(source);if(!source.trim())return source;
+ check(source);if(mode==='smartdecode')return smartDecode({text:source}).result;if(!source.trim())return source;
  if(mode==='auto'){const t=source.trim();mode=/^[{[]/.test(t)?'json':t.startsWith('<')?'xml':isAIText(source)?'ai-text':/^(select|insert|update|delete|with|create|alter|drop)\b/i.test(t)?'sql':'text';}
  if(mode==='ai-text')return formatAIText(source);
  if(mode==='json')return prettyJSON(source);
@@ -84,6 +85,50 @@ function textOp({text,op,pattern='',delimiter=',',field=1,mode='auto'}){
   case 'newline':if(!pattern)throw Error('请输入要替换成换行的字符');return text.split(pattern).join('\n');
   default:throw Error('未知文本操作');
  }
+}
+// Ported from cyeam_web/views/tool/smartdecode.html. Keep its detection order and 20-layer bound.
+const htmlEntities=new EntityDecoder({namedEntities:ALL_ENTITIES});
+function printableUTF8(bytes){
+ try{const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);return text&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(text)?text:null;}catch{return null;}
+}
+function decodeOne(value){
+ if(/%[0-9a-f]{2}/i.test(value)){try{return {value:decodeURIComponent(value.replace(/\+/g,'%20')),name:'URL 编码'};}catch{}}
+ if(/\\u[0-9a-f]{4}/i.test(value))return {value:value.replace(/\\u([0-9a-f]{4})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))),name:'Unicode 转义'};
+ if(/&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]+);/i.test(value)){
+  const decoded=htmlEntities.decode(value);if(decoded!==value)return {value:decoded,name:'HTML 实体'};
+ }
+ if(/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)&&value.length>=4){
+  let normalized=value.replace(/-/g,'+').replace(/_/g,'/');
+  if(normalized.length%4!==1){try{
+   normalized+='='.repeat((4-normalized.length%4)%4);
+   const binary=atob(normalized),bytes=Uint8Array.from(binary,c=>c.charCodeAt(0)),decoded=printableUTF8(bytes);
+   if(decoded!==null)return {value:decoded,name:'Base64'};
+  }catch{}}
+ }
+ if(/^[A-Z2-7]+=*$/i.test(value)&&value.length>=8){
+  const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567',clean=value.replace(/=/g,'').toUpperCase(),bytes=new Uint8Array(Math.floor(clean.length*5/8));
+  let bits=0,buffer=0,index=0;
+  for(const char of clean){buffer=(buffer<<5)|alphabet.indexOf(char);bits+=5;if(bits>=8){bits-=8;bytes[index++]=(buffer>>bits)&255;buffer&=(1<<bits)-1;}}
+  const decoded=printableUTF8(bytes);if(decoded!==null)return {value:decoded,name:'Base32'};
+ }
+ if(/^[0-9a-f]+$/i.test(value)&&value.length>=2&&value.length%2===0){
+  const bytes=new Uint8Array(value.length/2);for(let i=0;i<value.length;i+=2)bytes[i/2]=parseInt(value.slice(i,i+2),16);
+  const decoded=printableUTF8(bytes);if(decoded!==null)return {value:decoded,name:'Hex 十六进制'};
+ }
+ return null;
+}
+function smartDecode({text}){
+ check(text);let current=text;const steps=[];
+ for(let depth=0;depth<20;depth++){const next=decodeOne(current);if(!next||next.value===current)break;check(next.value);current=next.value;steps.push({name:next.name,value:next.value.slice(0,20000),truncated:next.value.length>20000});}
+ return {result:current,layers:steps.map(step=>step.name),steps,limited:steps.length===20};
+}
+// Keep every byte of each HTML fragment so selecting all local/cloud chunks is lossless.
+function noteCompare({left,right}){
+ check(left);check(right);
+ const tokens=html=>html.split(/(?<=<\/(?:p|div|h[1-6]|li|tr|table|ul|ol|blockquote|pre)>|<br>|<hr>|\n)/i);
+ const parts=diffArrays(tokens(left),tokens(right),{timeout:1500,maxEditLength:10000});
+ if(!parts)throw Error('差异过多，请使用整篇版本或缩小内容后重试');
+ return parts.map(part=>({kind:part.added?'added':part.removed?'removed':'same',html:part.value.join('')}));
 }
 function compare({left,right}){
  check(left);check(right);
@@ -239,4 +284,4 @@ function tableOp({rows,op,column=0,pattern='',ascending=true}){
  throw Error('未知表格操作');
 }
 function stats({rows,column}){const values=rows.slice(1).map(r=>String(r[column]??'')).filter(v=>v.trim());const numbers=values.filter(v=>Number.isFinite(Number(v))).map(Number);const sum=numbers.reduce((a,b)=>a+b,0);return {count:values.length,numeric:numbers.length,sum,mean:numbers.length?sum/numbers.length:null};}
-module.exports={stats,format,textOp,compare,parseCSV,importTable,exportTable,tableOp,normalize,objects,xlsxRead,xlsxWrite};
+module.exports={smartDecode,noteCompare,stats,format,textOp,compare,parseCSV,importTable,exportTable,tableOp,normalize,objects,xlsxRead,xlsxWrite};

@@ -165,7 +165,12 @@ impl Engine {
                 html: n.html.clone(),
             });
         }
-        if self.authenticated && n.remote_id.is_some() {
+        if n.conflict && self.cloud.contains_key(id) {
+            self.emit(Event::Dialog {
+                kind: "conflict".into(),
+                data: json!({"id":n.id}),
+            });
+        } else if self.authenticated && n.remote_id.is_some() {
             self.job(Job::Get(n));
         }
         self.emit(Event::Selected {
@@ -365,9 +370,17 @@ impl Engine {
     fn dispatch(&mut self, v: Value) -> Result<()> {
         let saving = v["type"] == "change";
         let tool_saving = v["type"] == "tool_save";
+        let resolving = v["type"] == "resolve";
         let id = v["id"].as_str().unwrap_or_default().to_owned();
         let seq = v["seq"].as_u64().unwrap_or(0);
         match self.web(v) {
+            Err(err) if resolving => {
+                self.emit(Event::Dialog {
+                    kind: "conflict_result".into(),
+                    data: json!({"id":id,"ok":false,"message":format!("{err:#}")}),
+                });
+                Ok(())
+            }
             Err(err) if tool_saving => {
                 self.emit(Event::ToolSaveFailed {
                     seq,
@@ -565,13 +578,54 @@ impl Engine {
                     self.next_sync = Instant::now();
                 }
             }
+            "conflict_view" => {
+                let n = self.db.get(id)?;
+                anyhow::ensure!(
+                    n.account.is_empty() || n.account == self.account,
+                    "账号已切换，请重新打开笔记"
+                );
+                if n.conflict {
+                    if let Some((html, etag)) = self.cloud.get(id) {
+                        self.emit(Event::Dialog {
+                            kind: "conflict_view".into(),
+                            data: json!({"id":n.id,"title":n.title,"local":n.html,"revision":n.revision,"cloud":html,"etag":etag}),
+                        });
+                    } else if self.authenticated {
+                        self.job(Job::Get(n));
+                    }
+                }
+            }
             "resolve" => {
                 let owner = self.db.get(id)?;
                 anyhow::ensure!(
                     owner.account.is_empty() || owner.account == self.account,
                     "账号已切换，请重新打开笔记"
                 );
-                if let Some((html, etag)) = self.cloud.remove(id) {
+                let choice = v["choice"].as_str().unwrap_or_default();
+                anyhow::ensure!(
+                    ["cloud", "mine", "merge"].contains(&choice),
+                    "未知冲突处理方式"
+                );
+                if let Some(revision) = v["revision"].as_i64() {
+                    anyhow::ensure!(
+                        revision == owner.revision,
+                        "本地笔记已更新，请重新打开冲突对比"
+                    );
+                }
+                if let Some(etag) = v["etag"].as_str() {
+                    anyhow::ensure!(
+                        self.cloud
+                            .get(id)
+                            .is_some_and(|(_, current)| current == etag),
+                        "云端版本已更新，请重新打开冲突对比"
+                    );
+                }
+                let merged = if choice == "merge" {
+                    Some(v["html"].as_str().context("缺少合并内容")?.to_owned())
+                } else {
+                    None
+                };
+                if let Some((html, etag)) = self.cloud.get(id).cloned() {
                     let mut n = self.db.get(id)?;
                     n.baseline = html.clone();
                     n.etag = Some(etag);
@@ -582,10 +636,18 @@ impl Engine {
                         n.dirty = false;
                         n.revision += 1;
                     } else {
+                        if let Some(html) = merged {
+                            n.html = html;
+                            n.revision += 1;
+                        }
                         n.dirty = true;
-                        self.approved.insert(id.into(), n.revision);
                     }
                     self.db.put(&n)?;
+                    self.cloud.remove(id);
+                    if n.dirty {
+                        self.approved.insert(id.into(), n.revision);
+                    }
+                    let result = json!({"id":n.id,"ok":true,"choice":choice,"html":n.html,"pending_sync":n.dirty});
                     if self.selected.as_deref() == Some(id) {
                         self.emit(Event::Load {
                             intent: self.intent,
@@ -593,12 +655,24 @@ impl Engine {
                             title: n.title,
                             html: n.html,
                         });
+                    } else {
+                        self.preload(&n);
                     }
                     self.retry.remove(id);
                     self.next_sync = Instant::now();
+                    self.status = match choice {
+                        "cloud" => "已使用云端版本 · 已保存到本机",
+                        "mine" => "已保留本地版本 · 已保存到本机，等待同步到 OneDrive",
+                        _ => "已保存合并结果到本机 · 等待同步到 OneDrive",
+                    }
+                    .into();
                     self.state()?;
-                } else if self.authenticated {
-                    self.job(Job::Get(self.db.get(id)?));
+                    self.emit(Event::Dialog {
+                        kind: "conflict_result".into(),
+                        data: result,
+                    });
+                } else {
+                    anyhow::bail!("冲突版本已失效，请重新打开冲突对比");
                 }
             }
             "close" => {
@@ -615,10 +689,10 @@ impl Engine {
         n.deleted = false;
         // A create recovered from a lost HTTP response may already have a remote ID.
         self.db.put(&n)?;
-        self.cloud.insert(n.id.clone(), (html.clone(), etag));
+        self.cloud.insert(n.id.clone(), (html, etag));
         self.emit(Event::Dialog {
             kind: "conflict".into(),
-            data: json!({"id":n.id,"title":n.title,"cloud":html}),
+            data: json!({"id":n.id}),
         });
         self.status = "检测到版本冲突，草稿已保留".into();
         Ok(())
@@ -1052,6 +1126,49 @@ mod tests {
         assert_eq!(n.etag.as_deref(), Some("remote-tag"));
         assert!(!n.conflict);
         assert!(n.dirty);
+    }
+    #[test]
+    fn merged_conflict_is_saved_against_reviewed_cloud_version() {
+        let mut e = engine();
+        let (events, receiver) = async_channel::unbounded();
+        e.events = events;
+        let n = e.db.create("Note", "alice").unwrap();
+        e.conflict(n.clone(), "<p>cloud</p>".into(), "tag".into())
+            .unwrap();
+        e.web(json!({"type":"resolve","id":n.id,"choice":"merge","revision":n.revision,"etag":"tag","html":"<p>merged</p>"})).unwrap();
+        let resolved = e.db.get(&n.id).unwrap();
+        assert_eq!(resolved.html, "<p>merged</p>");
+        assert_eq!(resolved.baseline, "<p>cloud</p>");
+        assert_eq!(resolved.etag.as_deref(), Some("tag"));
+        assert_eq!(resolved.revision, n.revision + 1);
+        assert!(resolved.dirty && !resolved.conflict);
+        assert_eq!(e.approved.get(&n.id), Some(&resolved.revision));
+        let mut acknowledged = false;
+        while let Ok(event) = receiver.try_recv() {
+            if let Event::Dialog { kind, data } = event {
+                if kind == "conflict_result" {
+                    assert_eq!(data["ok"], true);
+                    assert_eq!(data["html"], resolved.html);
+                    assert_eq!(data["choice"], "merge");
+                    assert_eq!(data["pending_sync"], true);
+                    acknowledged = true;
+                }
+            }
+        }
+        assert!(acknowledged);
+    }
+    #[test]
+    fn stale_conflict_resolution_preserves_both_versions() {
+        let mut e = engine();
+        let n = e.db.create("Note", "alice").unwrap();
+        e.conflict(n.clone(), "cloud".into(), "tag".into()).unwrap();
+        e.db.edit(&n.id, "new local").unwrap();
+        assert!(e.web(json!({"type":"resolve","id":n.id,"choice":"merge","revision":n.revision,"etag":"tag","html":"stale"})).is_err());
+        let current = e.db.get(&n.id).unwrap();
+        assert!(e.web(json!({"type":"resolve","id":n.id,"choice":"cloud","revision":current.revision,"etag":"old-tag"})).is_err());
+        assert_eq!(e.db.get(&n.id).unwrap().html, "new local");
+        assert!(e.db.get(&n.id).unwrap().conflict);
+        assert_eq!(e.cloud.get(&n.id).unwrap().0, "cloud");
     }
     #[test]
     fn another_account_cannot_edit_or_delete_note() {

@@ -52,7 +52,7 @@ impl Notebook {
                 if this
                     .update_in(cx, |this, window, cx| {
                         this.switch_workspace(page, window, cx);
-                        if smoke() && this.smoke_shortcuts < 4 {
+                        if smoke() && this.smoke_shortcuts < Workspace::ALL.len() {
                             let expected = [
                                 Workspace::Text,
                                 Workspace::Diff,
@@ -61,7 +61,7 @@ impl Notebook {
                             ];
                             assert_eq!(page, expected[this.smoke_shortcuts]);
                             this.smoke_shortcuts += 1;
-                            if this.smoke_shortcuts < 4 {
+                            if this.smoke_shortcuts < Workspace::ALL.len() {
                                 this.js(&workspace::smoke_script(page));
                             } else {
                                 eprintln!("CNOTE_SMOKE_SHORTCUTS_OK");
@@ -364,6 +364,18 @@ impl Notebook {
     }
     fn ipc(&mut self, v: Value, window: &mut Window, cx: &mut Context<Self>) {
         match v["type"].as_str().unwrap_or_default() {
+            "image_clipboard" => {
+                let token = v["token"].as_u64().unwrap_or(0);
+                let source = v["src"].as_str().unwrap_or_default().to_owned();
+                let html = v["html"].as_str().unwrap_or_default().to_owned();
+                cx.spawn(async move |this, cx| {
+                    let result = cx.background_executor().spawn(async move { workspace::image_bytes(&source) }).await;
+                    let _ = this.update(cx, |this, _| {
+                        let result = result.and_then(|bytes| workspace::copy_image(&bytes, &html));
+                        this.js(&format!("window.cnote&&cnote.receive({})", json!({"type":"image_clipboard_result","token":token,"ok":result.is_ok(),"message":result.err().map(|error|error.to_string())})));
+                    });
+                }).detach();
+            }
             "native_note_navigation_smoke" if smoke() => {
                 if v["html"] != "<p>first</p><p>second</p><p>third</p>" || v["anchor"] != "second" {
                     eprintln!("CNOTE_SMOKE_NOTE_NAVIGATION_FAILED: {v}");
@@ -435,7 +447,7 @@ impl Notebook {
                     Workspace::Notes,
                 ];
                 if self.smoke_shortcuts > 0
-                    && self.smoke_shortcuts < 4
+                    && self.smoke_shortcuts < Workspace::ALL.len()
                     && v["index"].as_u64() == Some(self.workspace.index() as u64)
                 {
                     eprintln!("CNOTE_SMOKE_LOCAL_TOOL_OK: {}", self.workspace.label());

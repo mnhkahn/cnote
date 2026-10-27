@@ -7,6 +7,7 @@
     "check:tools": "node scripts/build-tools.cjs --check"
   },
   "devDependencies": {
+    "@nodable/entities": "3.1.0",
     "diff": "9.0.0",
     "esbuild": "0.28.2",
     "fast-xml-parser": "5.11.2",
