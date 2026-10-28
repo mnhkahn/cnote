@@ -5,182 +5,106 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' lo
  const browser=await type.launch({headless:true,...(executablePath?{executablePath}:{})});
  try{
   const context=await browser.newContext({viewport:{width:1100,height:800}}),page=await context.newPage(),requests=[],errors=[];
+  page.setDefaultTimeout(10000);
   // WebKit's simulated offline mode also blocks blob workers. Abort every real network request instead.
   await context.route(/^https?:\/\//,route=>route.abort('internetdisconnected'));
   page.on('request',r=>{if(/^https?:/.test(r.url()))requests.push(r.url());});page.on('pageerror',e=>errors.push(e.message));
   await page.setContent(`<script>window.messages=[];window.ipc={postMessage:raw=>{const m=JSON.parse(raw);messages.push(m);if(m.type==='tool_ready')setTimeout(()=>cnoteTools.receive({type:'tool_state',state:{}}),0);if(m.type==='tool_save'&&!window.blockToolSave)setTimeout(()=>cnoteTools.receive({type:'tool_saved',seq:m.seq}),5);if(m.type==='change')setTimeout(()=>cnote.receive({type:'saved',id:m.id,seq:m.seq}),5);if(m.type==='workspace')cnoteTools.show(m.index);}};</script>`+html);
   await page.waitForFunction(()=>window.cnote&&window.cnoteTools);
-  const previewAndApply=async()=>{await page.getByRole('button',{name:'预览处理结果',exact:true}).click();await page.waitForFunction(()=>!document.getElementById('text-apply').disabled);await page.getByRole('button',{name:'应用到原文',exact:true}).click();};
-  await t.test('local text editor formats offline and preserves large integers',async()=>{
+  const setInput=value=>page.evaluate(value=>ace.edit('tool-text-editor').setValue(value,-1),value);
+  const textValue=()=>page.evaluate(()=>cnoteTools.state.text);
+  const waitValue=value=>page.waitForFunction(value=>cnoteTools.state.text.replace(/\r\n/g,'\n')===value,value,{timeout:5000});
+  const action=op=>page.locator(`[data-text-op="${op}"]`).click();
+  await t.test('jsonpack has one editor and compact controls that apply directly and undo',async()=>{
    await page.keyboard.press('Meta+2');await page.waitForSelector('#tool-text-editor .ace_text-input');
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('{"id":9007199254740993123}',-1));
-   await previewAndApply();
+   assert.equal(await page.locator('#text-tool select').count(),0);
+   assert.equal(await page.locator('#tool-text-result, #text-apply, #text-preview').count(),0);
+   for(const id of ['text-filter','text-remove','text-delimiter','text-field','text-newline'])assert(await page.locator('#'+id).isVisible());
+   const original='{"id":9007199254740993123}';await setInput(original);await action('format');
    await page.waitForFunction(()=>cnoteTools.state.text.includes('\n'));
-   assert((await page.evaluate(()=>cnoteTools.state.text)).includes('9007199254740993123'));
-   assert.equal(await page.locator('#tool-text-editor .ace_content').evaluate(el=>getComputedStyle(el).position),'absolute');
-   assert((await page.locator('#tool-text-editor .ace_text-layer').textContent()).includes('9007199254740993123'));
-   await page.screenshot({path:path.join('/tmp','cnote-local-text-'+name+'.png')});
+   assert((await textValue()).includes('9007199254740993123'));
+   await page.locator('#text-undo').click();await waitValue(original);
+   await page.screenshot({path:path.join('/tmp','cnote-jsonpack-'+name+'.png')});
   });
-  await t.test('guided text operations preview without modifying input, apply explicitly and undo',async()=>{
-   await page.locator('#text-operation').selectOption('trim-empty');
-   assert.equal(await page.locator('#text-mode').isVisible(),false);assert.equal(await page.locator('#text-pattern').isVisible(),false);
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('苹果\n\n香蕉',-1));
-   await page.getByRole('button',{name:'预览处理结果',exact:true}).click();
-   await page.waitForFunction(()=>!document.getElementById('text-apply').disabled);
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),'苹果\n\n香蕉');
-   assert.equal(await page.evaluate(()=>ace.edit('tool-text-result').getValue()),'苹果\n香蕉');
-   assert((await page.locator('#text-feedback').textContent()).includes('3 行 → 2 行'));
-   await page.getByRole('button',{name:'应用到原文',exact:true}).click();
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),'苹果\n香蕉');
-   await page.getByRole('button',{name:'撤销',exact:true}).click();
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),'苹果\n\n香蕉');
-   assert(await page.locator('#text-apply').isDisabled());
-   await page.locator('#text-operation').selectOption('format');
-  });
-  await t.test('examples explain parameters and a changed setting invalidates the preview',async()=>{
-   await page.locator('#text-operation').selectOption('cut');
-   assert.equal(await page.locator('#text-delimiter').isVisible(),true);assert.equal(await page.locator('#text-pattern').isVisible(),false);
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('',-1));
-   await page.getByRole('button',{name:'填入示例',exact:true}).click();
-   assert.equal(await page.locator('#text-field').inputValue(),'2');
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),'小明,北京,12\n小红,上海,13');
-   await page.getByRole('button',{name:'预览处理结果',exact:true}).click();await page.waitForFunction(()=>!document.getElementById('text-apply').disabled);
-   assert.equal(await page.evaluate(()=>ace.edit('tool-text-result').getValue()),'北京\n上海');
-   await page.locator('#text-field').fill('3');
-   assert(await page.locator('#text-apply').isDisabled());assert(await page.locator('#text-copy-result').isDisabled());
-   await previewAndApply();assert.equal(await page.evaluate(()=>cnoteTools.state.text),'12\n13');
-   await page.locator('#text-operation').selectOption('format');
-  });
-  await t.test('operation parameters stay separate and empty input has a useful next step',async()=>{
-   await page.locator('#text-operation').selectOption('filter');await page.locator('#text-pattern').fill('^错误');
-   await page.locator('#text-operation').selectOption('remove');assert.equal(await page.locator('#text-pattern').inputValue(),'');
-   await page.locator('#text-pattern').fill('#');
-   await page.locator('#text-operation').selectOption('filter');assert.equal(await page.locator('#text-pattern').inputValue(),'^错误');
-   await page.locator('#text-operation').selectOption('remove');assert.equal(await page.locator('#text-pattern').inputValue(),'#');
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('',-1));
-   await page.getByRole('button',{name:'预览处理结果',exact:true}).click();
-   assert((await page.locator('#text-feedback').textContent()).includes('请先在原文区域粘贴文本'));
-   assert(await page.locator('#text-apply').isDisabled());
-   await page.locator('#text-operation').selectOption('format');
-  });
-  await t.test('UTF-8 editor assets render nonbreaking spaces without inventing Â characters',async()=>{
-   const input='{\n\u00a0\u00a0"name": "café",\n\t"local": true\n}';
-   await page.evaluate(value=>ace.edit('tool-text-editor').setValue(value,-1),input);
-   await page.waitForFunction(()=>document.querySelector('#tool-text-editor .ace_text-layer').textContent.includes('café'));
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),input);
-   assert.equal((await page.locator('#tool-text-editor .ace_text-layer').textContent()).includes('Â'),false);
-   assert.equal(await page.evaluate(()=>ace.edit('tool-text-editor').renderer.$textLayer.SPACE_CHAR),' ');
-   await page.getByLabel('显示空白标记',{exact:true}).check();
-   assert.equal(await page.evaluate(()=>ace.edit('tool-text-editor').renderer.$textLayer.SPACE_CHAR),'·');
-   assert.equal(await page.evaluate(()=>ace.edit('tool-text-editor').renderer.$textLayer.TAB_CHAR),'→');
-   assert.equal(await page.evaluate(()=>ace.edit('tool-text-editor').renderer.$textLayer.EOL_CHAR_LF),'¬');
-   await page.waitForFunction(()=>document.querySelector('#tool-text-editor .ace_text-layer').textContent.includes('·'));
-   assert.equal((await page.locator('#tool-text-editor .ace_text-layer').textContent()).includes('Â'),false);
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),input);
-   await page.getByLabel('显示空白标记',{exact:true}).uncheck();
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),input);
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('Â is a real character',-1));
-   await page.waitForFunction(()=>document.querySelector('#tool-text-editor .ace_text-layer').textContent.includes('Â is a real character'));
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),'Â is a real character');
-  });
-  await t.test('smart decode is a formatting type with layers and an explicit apply step',async()=>{
-   await page.locator('#text-operation').selectOption('format');await page.locator('#text-mode').selectOption('smartdecode');
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('',-1));
-   await page.getByRole('button',{name:'填入示例',exact:true}).click();
-   const original=await page.evaluate(()=>cnoteTools.state.text);assert.equal(original,'JUU0JUJEJUEwJUU1JUE1JUJE');
-   await page.getByRole('button',{name:'预览处理结果',exact:true}).click();await page.waitForFunction(()=>!document.getElementById('text-apply').disabled);
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),original);
-   assert.equal(await page.evaluate(()=>ace.edit('tool-text-result').getValue()),'你好');
-   assert((await page.locator('#text-feedback').textContent()).includes('Base64 → URL 编码'));
-   assert.equal(await page.locator('#text-decode-layers details').count(),2);
-   await page.locator('#text-decode-layers summary').first().click();assert((await page.locator('#text-decode-layers pre').first().textContent()).includes('%E4%BD%A0'));
-   await page.getByRole('button',{name:'应用到原文',exact:true}).click();assert.equal(await page.evaluate(()=>cnoteTools.state.text),'你好');
-   await page.getByRole('button',{name:'撤销',exact:true}).click();assert.equal(await page.evaluate(()=>cnoteTools.state.text),original);
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('&lt;img src=x onerror=alert(1)&gt;',-1));
-   await page.getByRole('button',{name:'预览处理结果',exact:true}).click();await page.waitForFunction(()=>!document.getElementById('text-apply').disabled);
-   assert.equal(await page.evaluate(()=>ace.edit('tool-text-result').getValue()),'<img src=x onerror=alert(1)>');
-   assert.equal(await page.locator('#text-decode-layers img').count(),0);
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('ordinary text',-1));
-   await page.getByRole('button',{name:'预览处理结果',exact:true}).click();await page.waitForFunction(()=>document.getElementById('text-feedback').textContent.includes('未识别到'));
-   assert(await page.locator('#text-apply').isDisabled());assert.equal(await page.locator('#text-decode-layers details').count(),0);
-   await page.locator('#text-mode').selectOption('auto');
-  });
-  await t.test('tool editors switch theme without changing drafts',async()=>{
-   const original=await page.evaluate(()=>cnoteTools.state.text);
-   await page.evaluate(()=>cnoteTheme.set('dark'));
-   assert.equal(await page.locator('#local-tools').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(25, 30, 41)');
-   assert.equal(await page.locator('#tool-text-editor').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(25, 30, 41)');
-   for(const theme of require('../editor/themes.json')){
-    await page.evaluate(id=>cnoteTheme.set(id),theme.id);
-    const expected='rgb('+theme.bg.match(/../g).map(v=>parseInt(v,16)).join(', ')+')';
-    assert.equal(await page.locator('#local-tools').evaluate(el=>getComputedStyle(el).backgroundColor),expected);
-    assert.equal(await page.locator('#tool-text-editor').evaluate(el=>getComputedStyle(el).backgroundColor),expected);
-    assert.equal(await page.evaluate(()=>cnoteTools.state.text),original);
+  await t.test('line operations directly transform the single document and are undoable',async()=>{
+   for(const [op,input,output] of [['trim-empty','苹果\n\n香蕉','苹果\n香蕉'],['join','第一行\n 第二行 ','第一行第二行'],['sort','b\na','a\nb'],['unique','b\na\nb','a\nb']]){
+    await setInput(input);await action(op);await waitValue(output);await page.locator('#text-undo').click();await waitValue(input);
    }
-   await page.evaluate(()=>cnoteTheme.set('light'));
-   assert.equal(await page.locator('#tool-text-editor').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(255, 255, 255)');
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),original);
+  });
+  await t.test('inline inputs execute on Enter or blur and clear after success',async()=>{
+   await setInput('成功：保存\n错误：断开\n成功：同步');await page.locator('#text-filter').fill('^错误');await page.locator('#text-filter').press('Enter');await waitValue('错误：断开');
+   assert.equal(await page.locator('#text-filter').inputValue(),'');
+   await setInput('#苹果 #香蕉');await page.locator('#text-remove').fill('#');await page.locator('#text-remove').press('Tab');await waitValue('苹果 香蕉');
+   await setInput('苹果,香蕉\n橙子');await page.locator('#text-newline').fill(',');await page.locator('#text-newline').press('Enter');await waitValue('苹果\n香蕉\n橙子');
+   await setInput('小明,北京,12\n小红,上海,13');await page.locator('#text-delimiter').fill(',');await page.locator('#text-field').fill('2');await page.locator('#text-field').press('Enter');await waitValue('北京\n上海');
+   assert.equal(await page.locator('#text-field').inputValue(),'');assert.equal(await page.locator('#text-delimiter').inputValue(),'');
+  });
+  await t.test('invalid operations preserve text and parameters for correction',async()=>{
+   await setInput('{invalid');await action('format');await page.waitForFunction(()=>document.getElementById('text-feedback').dataset.error==='true');assert.equal(await textValue(),'{invalid');
+   await page.locator('#text-filter').fill('[');await page.locator('#text-filter').press('Enter');await page.waitForFunction(()=>/regular expression/i.test(document.getElementById('text-feedback').textContent));
+   assert.equal(await textValue(),'{invalid');assert.equal(await page.locator('#text-filter').inputValue(),'[');await page.locator('#text-filter').fill('');
+   await page.locator('#text-field').fill('2');await page.locator('#text-field').press('Enter');assert.equal(await textValue(),'{invalid');await page.locator('#text-field').fill('');
+  });
+  await t.test('smart decode directly applies text safely and can be undone',async()=>{
+   const input='JUU0JUJEJUEwJUU1JUE1JUJE';await setInput(input);await action('smartdecode');await waitValue('你好');
+   assert.equal(await page.locator('#text-decode-layers details').count(),2);assert((await page.locator('#text-feedback').textContent()).includes('Base64 → URL 编码'));
+   await page.locator('#text-undo').click();await waitValue(input);
+   await setInput('&lt;img src=x onerror=alert(1)&gt;');await action('smartdecode');await waitValue('<img src=x onerror=alert(1)>');assert.equal(await page.locator('#text-decode-layers img').count(),0);
+   await setInput('ordinary text');await action('smartdecode');await page.waitForFunction(()=>document.getElementById('text-feedback').textContent.includes('未识别到'));
+  });
+  await t.test('nested URL decoding preserves plus signs in query parameters and supports undo',async()=>{
+   const original='https%3A%2F%2Fexample.com%2F%3Ftoken%3Da%2Bb%26next%3D%252Fhome';
+   await setInput(original);await action('smartdecode');await waitValue('https://example.com/?token=a+b&next=/home');
+   assert.equal(await page.locator('#text-decode-layers details').count(),2);
+   await action('smartdecode');await page.waitForFunction(()=>document.getElementById('text-feedback').textContent.includes('未识别到'));
+   assert.equal(await textValue(),'https://example.com/?token=a+b&next=/home');
+   await page.locator('#text-undo').click();await waitValue(original);
+  });
+  await t.test('ampersands remain readable through decoding and draft serialization',async()=>{
+   for(const input of ['https://example.com/?a=1%26b=2',String.raw`https://example.com/?a=1\u0026b=2`,'https://example.com/?a=1%5Cu0026b=2']){
+    await setInput(input);await action('smartdecode');await waitValue('https://example.com/?a=1&b=2');
+    await page.evaluate(()=>cnoteTools.flush());
+    const saved=await page.evaluate(()=>messages.filter(m=>m.type==='tool_save').at(-1).state.text);
+    assert.equal(saved,'https://example.com/?a=1&b=2');
+    await page.waitForFunction(()=>document.querySelector('#tool-text-editor .ace_text-layer').textContent.includes('&b=2'));
+   }
+  });
+  await t.test('format button restores Unicode ampersands in URLs and JSON and remains undoable',async()=>{
+   for(const original of [String.raw`https://example.com/?a=1\u0026b=2`,String.raw`{"url":"https://example.com/?a=1\u0026b=2","id":9007199254740993123}`]){
+    await setInput(original);await action('format');
+    await page.waitForFunction(()=>cnoteTools.state.text.includes('&b=2'));
+    assert.equal((await textValue()).includes(String.raw`\u0026`),false);
+    if(original.startsWith('{'))assert((await textValue()).includes('9007199254740993123'));
+    await page.locator('#text-undo').click();await waitValue(original);
+   }
+  });
+  await t.test('format auto detects JSON XML SQL and AI text',async()=>{
+   for(const [input,expected] of [['<note><title>CNote</title></note>','<note>\n  <title>CNote</title>\n</note>'],['select name from notes','SELECT\n  name\nFROM\n  notes'],['第一段被截\n    断了。\n\n    Hello\n    world','第一段被截断了。\n\nHello world']]){
+    await setInput(input);await action('format');await waitValue(expected);await page.locator('#text-undo').click();await waitValue(input);
+   }
+  });
+  await t.test('whitespace and themes only change display, native editing targets focused input',async()=>{
+   const input='a b\t c\n  d';await setInput(input);await page.locator('#text-show-whitespace').check();
+   await page.waitForFunction(()=>document.querySelector('#tool-text-editor .ace_text-layer').textContent.includes('·'));
+   assert.equal((await page.locator('#tool-text-editor .ace_text-layer').textContent()).includes('Â'),false);assert.equal(await textValue(),input);
+   await page.locator('#text-show-whitespace').uncheck();
+   for(const theme of require('../editor/themes.json')){await page.evaluate(id=>cnoteTheme.set(id),theme.id);assert.equal(await page.locator('#tool-text-editor').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb('+theme.bg.match(/../g).map(v=>parseInt(v,16)).join(', ')+')');assert.equal(await textValue(),input);}
    await page.evaluate(()=>cnoteTheme.set('system'));
-  });
-  await t.test('editing menu targets the focused input instead of the text editor',async()=>{
-   await page.locator('#text-operation').selectOption('remove');
-   await page.locator('#text-pattern').fill('pattern');
-   await page.evaluate(()=>cnoteTools.edit('selectAll'));
-   assert.deepEqual(await page.locator('#text-pattern').evaluate(el=>[el.selectionStart,el.selectionEnd]),[0,7]);
-   assert.equal(await page.locator('#text-pattern').evaluate(el=>document.activeElement===el),true);
-   await page.evaluate(()=>ace.edit('tool-text-editor').focus());
-   await page.evaluate(()=>cnoteTools.edit('selectAll'));
-   assert.equal(await page.evaluate(()=>ace.edit('tool-text-editor').getSelectedText()),await page.evaluate(()=>cnoteTools.state.text));
-  });
-  await t.test('AI text formats through the offline worker and remains undoable',async()=>{
-   await page.locator('#text-operation').selectOption('format');
-   const input='第一段被截\r\n    断了。\r\n\r\n    Hello\r\n    world\r\n    https://example.com/long\r\n    /path.html';
-   await page.locator('#text-mode').selectOption('auto');
-   await page.evaluate(value=>ace.edit('tool-text-editor').setValue(value,-1),input);
-   const original=await page.evaluate(()=>cnoteTools.state.text);
-   await previewAndApply();
-   await page.waitForFunction(()=>cnoteTools.state.text==='第一段被截断了。\n\nHello world https://example.com/long/path.html');
-   await page.evaluate(()=>cnoteTools.edit('undo'));
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),original.replace(/\r\n/g,'\n'));
-   await page.locator('#text-mode').selectOption('ai-text');
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('没有缩进\n也能手动合并',-1));
-   await previewAndApply();
-   await page.waitForFunction(()=>cnoteTools.state.text==='没有缩进也能手动合并');
-   await page.locator('#text-mode').selectOption('auto');
-  });
-  await t.test('arrow characters cannot be inserted into Ace or tool inputs',async()=>{
-   await page.locator('#text-operation').selectOption('remove');
-   await page.evaluate(()=>ace.edit('tool-text-editor').focus());
-   const original=await page.evaluate(()=>cnoteTools.state.text);
-   for(const character of ['\u001e','\uf701'])await page.keyboard.insertText(character);
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),original);
-   await page.locator('#text-pattern').fill('pattern');
-   for(const character of ['\u001e','\uf701'])await page.keyboard.insertText(character);
-   assert.equal(await page.locator('#text-pattern').inputValue(),'pattern');
+   await page.locator('#text-remove').fill('pattern');await page.evaluate(()=>cnoteTools.edit('selectAll'));assert.deepEqual(await page.locator('#text-remove').evaluate(el=>[el.selectionStart,el.selectionEnd]),[0,7]);
+   await page.locator('#text-remove').fill('');
+   await page.evaluate(()=>ace.edit('tool-text-editor').focus());const original=await textValue();for(const char of ['\u001e','\uf701'])await page.keyboard.insertText(char);assert.equal(await textValue(),original);
   });
   await t.test('an asynchronous transform cannot overwrite newer typing',async()=>{
-   await page.locator('#text-operation').selectOption('format');
    await page.evaluate(()=>{window.originalWorkerPost=Worker.prototype.postMessage;Worker.prototype.postMessage=function(...args){if(args[0].task==='textOp')setTimeout(()=>originalWorkerPost.apply(this,args),150);else originalWorkerPost.apply(this,args);};ace.edit('tool-text-editor').setValue('{"old":1}',-1);});
-   await page.getByRole('button',{name:'预览处理结果',exact:true}).click();
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('new typing',-1));
-   await page.waitForFunction(()=>document.getElementById('tool-status').textContent.includes('已保留新输入'));
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),'new typing');
-   await page.evaluate(()=>Worker.prototype.postMessage=originalWorkerPost);
-  });
-  await t.test('invalid JSON and regex preserve input and report errors',async()=>{
-   await page.evaluate(()=>ace.edit('tool-text-editor').setValue('{invalid',-1));
-   await page.getByRole('button',{name:'预览处理结果',exact:true}).click();
-   await page.waitForFunction(()=>document.getElementById('tool-status').dataset.error==='true');
-   assert.equal(await page.evaluate(()=>cnoteTools.state.text),'{invalid');
-   await page.locator('#text-operation').selectOption('filter');await page.locator('#text-pattern').fill('[');await page.getByRole('button',{name:'预览处理结果',exact:true}).click();
-   await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>cnoteTools.state.text),'{invalid');
+   await action('format');await setInput('new typing');await page.waitForFunction(()=>document.getElementById('text-feedback').textContent.includes('已保留新输入'));assert.equal(await textValue(),'new typing');await page.evaluate(()=>Worker.prototype.postMessage=originalWorkerPost);
   });
   await t.test('diff works offline, switching keeps both editor documents',async()=>{
+   const original=await textValue();
    await page.keyboard.press('Meta+3');
    await page.evaluate(()=>{ace.edit('tool-diff-left').setValue('same\nold\n',-1);ace.edit('tool-diff-right').setValue('same\nnew\n',-1);});
    await page.waitForFunction(()=>document.getElementById('diff-count').textContent==='+1 / −1');
    assert.equal(await page.locator('#diff-output .removed').count(),1);assert.equal(await page.locator('#diff-output .added').count(),1);
-   await page.keyboard.press('Meta+2');assert.equal(await page.evaluate(()=>ace.edit('tool-text-editor').getValue()),'{invalid');
+   await page.keyboard.press('Meta+2');assert.equal(await page.evaluate(()=>ace.edit('tool-text-editor').getValue()),original);
    await page.keyboard.press('Meta+3');assert.equal(await page.evaluate(()=>ace.edit('tool-diff-right').getValue()),'same\nnew\n');
   });
   await t.test('Command 1 resumes the note at its saved caret position',async()=>{

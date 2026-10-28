@@ -16,7 +16,7 @@ function prettyJSON(source){
   const t=tokens[i],previous=tokens[i-1],next=tokens[i+1];
   if(t==='{'||t==='['){out+=t;depth++;if(next!=='}'&&next!==']')out+='\n'+pad();}
   else if(t==='}'||t===']'){depth--;if(previous!=='{'&&previous!=='[')out+='\n'+pad();out+=t;}
-  else if(t===',')out+=',\n'+pad();else if(t===':')out+=': ';else out+=t;
+  else if(t===',')out+=',\n'+pad();else if(t===':')out+=': ';else out+=t.startsWith('"')?JSON.stringify(JSON.parse(t)):t;
  }
  return out;
 }
@@ -61,9 +61,11 @@ function formatAIText(content) {
     return result.join("\n").trim();
 }
 
-function format(source,mode='auto'){
+function format(source,mode='auto',depth=0){
  check(source);if(mode==='smartdecode')return smartDecode({text:source}).result;if(!source.trim())return source;
- if(mode==='auto'){const t=source.trim();mode=/^[{[]/.test(t)?'json':t.startsWith('<')?'xml':isAIText(source)?'ai-text':/^(select|insert|update|delete|with|create|alter|drop)\b/i.test(t)?'sql':'text';}
+ if(mode==='auto'){const t=source.trim();mode=/^[{[]/.test(t)?'json':t.startsWith('<')?'xml':isAIText(source)?'ai-text':/^(select|insert|update|delete|with|create|alter|drop)\b/i.test(t)?'sql':'text';
+  if(mode==='text'&&depth<20&&/(?:\\u[0-9a-f]{4}|%[0-9a-f]{2})/i.test(source)){const decoded=decodeOne(source);if(decoded&&decoded.value!==source)return format(decoded.value,'auto',depth+1);}
+ }
  if(mode==='ai-text')return formatAIText(source);
  if(mode==='json')return prettyJSON(source);
  if(mode==='xml'){const valid=XMLValidator.validate(source);if(valid!==true)throw Error(valid.err?.msg||'XML 格式错误');return xmlFormatter(source,{indentation:'  ',collapseContent:true,whiteSpaceAtEndOfSelfclosingTag:true});}
@@ -86,13 +88,13 @@ function textOp({text,op,pattern='',delimiter=',',field=1,mode='auto'}){
   default:throw Error('未知文本操作');
  }
 }
-// Ported from cyeam_web/views/tool/smartdecode.html. Keep its detection order and 20-layer bound.
+// Based on cyeam_web smartdecode; preserve literal plus signs when decoding URI escapes.
 const htmlEntities=new EntityDecoder({namedEntities:ALL_ENTITIES});
 function printableUTF8(bytes){
  try{const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);return text&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(text)?text:null;}catch{return null;}
 }
 function decodeOne(value){
- if(/%[0-9a-f]{2}/i.test(value)){try{return {value:decodeURIComponent(value.replace(/\+/g,'%20')),name:'URL 编码'};}catch{}}
+ if(/%[0-9a-f]{2}/i.test(value)){try{return {value:decodeURIComponent(value),name:'URL 编码'};}catch{}}
  if(/\\u[0-9a-f]{4}/i.test(value))return {value:value.replace(/\\u([0-9a-f]{4})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16))),name:'Unicode 转义'};
  if(/&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]+);/i.test(value)){
   const decoded=htmlEntities.decode(value);if(decoded!==value)return {value:decoded,name:'HTML 实体'};

@@ -135,3 +135,36 @@ test('smart decode preserves unrecognized, invalid UTF-8 and binary data and bou
  const d=c.smartDecode({text});assert.equal(d.layers.length,20);assert.equal(d.limited,true);assert.notEqual(d.result,'你好');assert.equal(c.smartDecode({text:d.result}).result,'你好');
  const large='Hello '.repeat(4000);const bounded=c.smartDecode({text:Buffer.from(large).toString('base64')});assert.equal(bounded.result,large);assert.equal(bounded.steps[0].value.length,20000);assert.equal(bounded.steps[0].truncated,true);
 });
+
+test('URL decoding preserves literal and decoded plus signs across layers',()=>{
+ const cases=[
+  ['https://example.com/search?q=C++&name=%E4%BD%A0%E5%A5%BD','https://example.com/search?q=C++&name=你好'],
+  ['%2B%2520','+ '],
+  ['https%3A%2F%2Fexample.com%2F%3Ftoken%3Da%2Bb%26next%3D%252Fhome','https://example.com/?token=a+b&next=/home'],
+  ['%252B%252B%2520%25E4%25BD%25A0','++ 你'],
+  ['a+b%20c','a+b c']
+ ];
+ for(const [text,expected]of cases){
+  const decoded=c.smartDecode({text});assert.equal(decoded.result,expected);
+  assert.equal(c.smartDecode({text:decoded.result}).result,expected);
+ }
+});
+
+test('ampersands stay literal when decoding URL and Unicode escapes',()=>{
+ for(const text of ['https://example.com/?a=1&b=2','https://example.com/?a=1%26b=2',String.raw`https://example.com/?a=1\u0026b=2`,'https://example.com/?a=1%5Cu0026b=2']){
+  const result=c.smartDecode({text}).result;
+  assert.equal(result,'https://example.com/?a=1&b=2');
+  assert.equal(c.smartDecode({text:result}).result,result);
+ }
+ assert.equal(c.format('{"url":"https://example.com/?a=1&b=2"}'),'{\n  "url": "https://example.com/?a=1&b=2"\n}');
+});
+
+test('format restores escaped URLs and readable JSON string characters without losing integers',()=>{
+ const url='https://example.com/?a=1&b=2';
+ for(const source of [String.raw`https://example.com/?a=1\u0026b=2`,'https://example.com/?a=1%26b=2','https://example.com/?a=1%5Cu0026b=2'])assert.equal(c.format(source),url);
+ const source=String.raw`{"url":"https://example.com/?a=1\u0026b=2","name":"\u4f60\u597d","id":9007199254740993123,"literal":"\\u0026","quote":"\u0022","newline":"\n"}`;
+ const result=c.format(source);const parsed=JSON.parse(result);
+ assert.equal(parsed.url,url);assert.equal(parsed.name,'你好');assert.equal(parsed.literal,String.raw`\u0026`);assert.equal(parsed.quote,'"');assert.equal(parsed.newline,'\n');assert(result.includes('9007199254740993123'));
+ assert.equal(c.format(encodeURIComponent(source)),result);
+ assert.equal(c.format(result),result);
+});

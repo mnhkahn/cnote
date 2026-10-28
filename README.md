@@ -60,8 +60,8 @@ open dist/CNote.app
 
 ## 本地工具
 
-- 文本：本地 Ace 代码编辑器，支持多光标 / Option 列选择、撤销重做、JSON / XML / SQL / AI 文本格式化、智能解码、JSON 压缩、去空行、合并换行、排序去重、正则按行过滤、字面字符删除、分隔符提取列和字符换行。JSON 格式化保留大整数原始字面值。AI 文本自动识别固定缩进、清理行首空白、合并断行文字和 URL，保留表格记录与空行分段；也可手动选择 AI 文本格式。
-- 智能解码位于“文本处理 → 格式化文本 → 文本类型”，复用 cyeam_web 的 `/tool/smartdecode`：自动识别 URL、Unicode 转义、HTML 实体、Base64（含 URL-safe）、Base32 和 Hex，最多还原 20 层，展示每层结果；先预览，再复制或应用到原文。全部在本机运行。
+- 文本：本地 Ace 代码编辑器，支持多光标 / Option 列选择、撤销重做、JSON / XML / SQL / AI 文本格式化、智能解码、去空行、合并换行、排序去重、正则按行过滤、字面字符删除、分隔符提取列和字符换行。JSON 格式化保留大整数原始字面值，并将字符串中的 Unicode 转义显示为实际字符（如 `\u0026` 显示为 `&`）；普通文本中的 URL 编码和 Unicode 转义也可直接点“格式化”还原。AI 文本自动识别固定缩进、清理行首空白、合并断行文字和 URL，保留表格记录与空行分段。工具栏参照 jsonpack：单编辑区直接处理，参数输入后按回车或离开输入框执行，⌘Z 可撤销。
+- 智能解码位于文本工具栏，复用 cyeam_web 的 `/tool/smartdecode`：自动识别 URL、Unicode 转义、HTML 实体、Base64（含 URL-safe）、Base32 和 Hex，最多还原 20 层，展示每层结果；直接应用到编辑区，支持撤销。全部在本机运行。
 - Diff：双侧编辑、实时行差异、两侧排序 / 去重 / 格式化、复制新增或删除内容，结果分页显示，不创建海量 DOM。
 - 表格：导入 CSV / TSV、JSON、JSONL、Markdown、HTML、SQL INSERT、Excel；编辑单元格和表头、增删行列、数值排序、筛选保留、去重、转置、计数统计、撤销重做；导出 CSV、JSON、JSONL、Markdown、HTML、SQL、Excel，通过原生保存对话框选择文件。打印 / PDF 使用 macOS 打印窗口。
 
