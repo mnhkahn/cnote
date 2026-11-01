@@ -230,23 +230,23 @@ impl Api {
             .pop_if_empty()
             .push(attachment["name"].as_str().unwrap_or("attachment"));
         // Thumbnails use previews; the local viewer explicitly requests original bytes.
-        if !original && mime.starts_with("image/") {
-            if let Some(preview) = attachment["previews"].as_array().and_then(|items| {
+        if !original
+            && mime.starts_with("image/")
+            && let Some(preview) = attachment["previews"].as_array().and_then(|items| {
                 items
                     .iter()
                     .filter(|p| p["width"].as_u64().is_some_and(|w| w <= 480))
                     .max_by_key(|p| p["width"].as_u64().unwrap_or(0))
-            }) {
-                if let Some(value) = preview["url"].as_str() {
-                    let candidate = url::Url::parse(value).context("附件预览地址无效")?;
-                    if authorized_attachment_host(&candidate)
-                        && candidate
-                            .path()
-                            .starts_with(&format!("/1/cards/{card}/attachments/{id}/"))
-                    {
-                        url = candidate;
-                    }
-                }
+            })
+            && let Some(value) = preview["url"].as_str()
+        {
+            let candidate = url::Url::parse(value).context("附件预览地址无效")?;
+            if authorized_attachment_host(&candidate)
+                && candidate
+                    .path()
+                    .starts_with(&format!("/1/cards/{card}/attachments/{id}/"))
+            {
+                url = candidate;
             }
         }
         let limit = if mime.starts_with("text/") || mime == "application/json" {

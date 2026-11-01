@@ -347,6 +347,13 @@ impl Notebook {
             self.js(&format!("window.cnote&&cnote.receive({s})"));
         }
     }
+    pub fn refresh_workspace(&self) {
+        if self.workspace == Workspace::Trello {
+            self.js("window.cnoteTrello?.refresh()");
+        } else {
+            self.action("refresh", json!({}));
+        }
+    }
     pub fn action(&self, kind: &str, data: Value) {
         self.js(&format!(
             "window.cnote&&cnote.action({},{})",
@@ -475,6 +482,7 @@ impl Notebook {
                 })
                 .detach();
             }
+            "refresh_workspace" => self.refresh_workspace(),
             "workspace" => {
                 if let Some(page) = Workspace::from_message(&v.to_string()) {
                     self.switch_workspace(page, window, cx);

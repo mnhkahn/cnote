@@ -29,6 +29,12 @@
  }, true);
  document.addEventListener('keydown', event => {
   if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing) return;
+  if (event.code === 'KeyR') {
+   event.preventDefault();
+   event.stopImmediatePropagation();
+   window.ipc.postMessage(JSON.stringify({type:'refresh_workspace'}));
+   return;
+  }
   if (event.code === 'KeyS') {
    event.preventDefault();
    event.stopImmediatePropagation();

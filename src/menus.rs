@@ -217,7 +217,7 @@ pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
     });
     cx.on_action(move |_: &Sync, cx| {
         cx.defer(move |cx| {
-            let _ = window.update(cx, |v, _, _| v.action("refresh", json!({})));
+            let _ = window.update(cx, |v, _, _| v.refresh_workspace());
         });
     });
     cx.on_action(move |_: &ToggleSidebar, cx| {
@@ -266,7 +266,7 @@ pub fn set_menus(cx: &mut App, theme: Theme) {
         Menu::new("文件").items([
             MenuItem::action("新建笔记…", NewNote),
             MenuItem::action("保存并同步笔记", Save),
-            MenuItem::action("刷新云端笔记", Sync),
+            MenuItem::action("刷新当前工作区", Sync),
         ]),
         Menu::new("编辑").items([
             MenuItem::os_action("撤销", Undo, OsAction::Undo),
