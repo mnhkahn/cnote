@@ -122,9 +122,6 @@ struct Cloud {
     tokens: Option<Tokens>,
 }
 impl Cloud {
-    fn entry() -> Result<keyring::Entry> {
-        Ok(keyring::Entry::new("com.cyeam.cnote", "onedrive-oauth")?)
-    }
     fn store(&mut self, t: TokenResponse) -> Result<()> {
         let refresh = if t.refresh_token.is_empty() {
             self.tokens
@@ -139,8 +136,7 @@ impl Cloud {
             refresh_token: refresh,
             expires_at: timestamp() + t.expires_in,
         };
-        Self::entry()?
-            .set_password(&serde_json::to_string(&tokens)?)
+        crate::credential_store::set("onedrive-oauth", &serde_json::to_string(&tokens)?)
             .context("无法把登录凭据保存到系统钥匙串")?;
         self.tokens = Some(tokens);
         Ok(())
@@ -191,13 +187,12 @@ impl Cloud {
         })
     }
     fn restore(&mut self) -> Result<Reply> {
-        match Self::entry()?.get_password() {
-            Ok(s) => {
+        match crate::credential_store::get("onedrive-oauth")? {
+            Some(s) => {
                 self.tokens = Some(serde_json::from_str(&s)?);
                 self.account()
             }
-            Err(keyring::Error::NoEntry) => Ok(Reply::LoggedOut),
-            Err(e) => Err(e.into()),
+            None => Ok(Reply::LoggedOut),
         }
     }
     fn login(
@@ -363,11 +358,8 @@ impl Cloud {
         match job {
             Job::Restore => self.restore(),
             Job::Logout => {
+                crate::credential_store::remove("onedrive-oauth")?;
                 self.tokens = None;
-                match Self::entry()?.delete_credential() {
-                    Ok(()) | Err(keyring::Error::NoEntry) => {}
-                    Err(e) => return Err(e.into()),
-                };
                 Ok(Reply::LoggedOut)
             }
             Job::List => Ok(Reply::List(self.list()?)),

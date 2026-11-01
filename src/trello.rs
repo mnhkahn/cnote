@@ -51,17 +51,10 @@ struct Credentials {
     key: String,
     token: String,
 }
-fn entry() -> Result<keyring::Entry> {
-    keyring::Entry::new("com.cyeam.cnote", "trello-auth").context("无法访问系统钥匙串")
-}
 fn stored() -> Result<Option<Credentials>> {
-    match entry()?.get_password() {
-        Ok(value) => Ok(Some(
-            serde_json::from_str(&value).context("Trello 凭据损坏，请重新关联")?,
-        )),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => bail!("无法读取 Trello 系统钥匙串，请检查钥匙串权限"),
-    }
+    crate::credential_store::get("trello-auth")?
+        .map(|value| serde_json::from_str(&value).context("Trello 凭据损坏，请重新关联"))
+        .transpose()
 }
 fn configured_key() -> &'static str {
     option_env!("CNOTE_TRELLO_API_KEY").unwrap_or("")
@@ -348,18 +341,13 @@ pub fn request(v: Value) -> Result<Value> {
             let auth = credentials(&v)?;
             let api = Api::new(auth)?;
             let member = api.get("/members/me", &[("fields", "fullName,username")])?;
-            entry()?
-                .set_password(&serde_json::to_string(&api.auth)?)
-                .map_err(|_| anyhow::anyhow!("无法将 Trello 凭据保存到系统钥匙串"))?;
+            crate::credential_store::set("trello-auth", &serde_json::to_string(&api.auth)?)?;
             session.loaded = true;
             session.auth = Some(api.auth.clone());
             return Ok(json!({"connected":true,"name":member["fullName"]}));
         }
         "disconnect" => {
-            match entry()?.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => {}
-                Err(_) => bail!("无法移除系统钥匙串中的 Trello 凭据"),
-            }
+            crate::credential_store::remove("trello-auth")?;
             session.loaded = true;
             session.auth = None;
             return Ok(json!({"connected":false}));

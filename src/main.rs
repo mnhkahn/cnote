@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod analytics;
 mod cloud;
+mod credential_store;
 mod engine;
 mod icons;
 mod menus;
