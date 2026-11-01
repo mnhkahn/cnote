@@ -58,17 +58,18 @@
   const listName=card=>lists.find(list=>list.id===card.idList)?.name||'未知进度';
   const rank=card=>{const name=listName(card).trim();if(name==='待完成')return 0;if(name==='待改错')return 1;if(name==='已完成')return 3;if(name==='已改错')return 4;return card.dueComplete?3:2;};
   const grade=card=>String(card.desc||'').match(/^\s*打分结果\s*[:：]\s*([^\r\n]+)/m)?.[1].trim()||'—';
-  const completedAt=card=>{const value=card.dateCompleted?Date.parse(card.dateCompleted):NaN;return Number.isFinite(value)?value:Number.MAX_SAFE_INTEGER;};
-  const completionText=card=>{const value=completedAt(card);if(value===Number.MAX_SAFE_INTEGER)return '—';const date=new Date(value);return `${dayKey(date)} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;};
+  const timestamp=value=>{const time=value?Date.parse(value):NaN;return Number.isFinite(time)?time:Number.MAX_SAFE_INTEGER;};
+  const completedAt=card=>timestamp(card.dateCompleted);
+  const timeText=value=>{value=timestamp(value);if(value===Number.MAX_SAFE_INTEGER)return '—';const date=new Date(value);return `${dayKey(date)} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;};
   const table=node('table',null,'trello-table');table.setAttribute('aria-label','当天 Trello 任务');
-  const head=node('thead'),heading=node('tr');for(const label of ['标题','进度','打分结果','完成时间']){const cell=node('th',label);cell.scope='col';heading.append(cell);}head.append(heading);table.append(head);
-  const body=node('tbody');for(const card of daily.sort((a,b)=>rank(a)-rank(b)||listName(a).localeCompare(listName(b),'zh-CN')||completedAt(a)-completedAt(b))){
+  const head=node('thead'),heading=node('tr');for(const label of ['标题','进度','打分结果','实际完成时间','预计完成时间']){const cell=node('th',label);cell.scope='col';heading.append(cell);}head.append(heading);table.append(head);
+  const body=node('tbody');for(const card of daily.sort((a,b)=>rank(a)-rank(b)||listName(a).localeCompare(listName(b),'zh-CN')||completedAt(a)-completedAt(b)||timestamp(a.due)-timestamp(b.due))){
    const row=node('tr',null,'trello-task');row.dataset.completed=String(rank(card)>=3);
    const titleCell=node('td');titleCell.append(button(card.name,()=>showDetail(card),'trello-open-card'));
-   row.append(titleCell,node('td',listName(card),'trello-progress'),node('td',grade(card),'trello-grade'),node('td',completionText(card),'trello-completed-at'));
+   row.append(titleCell,node('td',listName(card),'trello-progress'),node('td',grade(card),'trello-grade'),node('td',timeText(card.dateCompleted),'trello-completed-at'),node('td',timeText(card.due),'trello-due-at'));
    row.onclick=event=>{if(!event.target.closest('button'))showDetail(card);};body.append(row);
   }
-  if(!daily.length){const row=node('tr'),cell=node('td','当天没有到期卡片','trello-empty');cell.colSpan=4;row.append(cell);body.append(row);}
+  if(!daily.length){const row=node('tr'),cell=node('td','当天没有到期卡片','trello-empty');cell.colSpan=5;row.append(cell);body.append(row);}
   table.append(body);content.append(table);if(!daily.length)message('当天没有到期卡片，可选择其他日期。');else message('');
 
  }

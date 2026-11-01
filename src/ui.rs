@@ -105,7 +105,7 @@ impl Notebook {
                 position: wry::dpi::LogicalPosition::new(280., 0.).into(),
                 size: wry::dpi::LogicalSize::new(900., 750.).into(),
             })
-            .with_navigation_handler(|url| url == "about:blank")
+            .with_navigation_handler(|url| url == "about:blank" || url.starts_with("blob:null/"))
             .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
             .with_ipc_handler(move |request| {
                 let _ = ipc_tx.try_send(request.into_body());
