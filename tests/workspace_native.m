@@ -112,7 +112,7 @@ static void webEditing(void) {
 }
 int main(void) {
  @autoreleasepool {
-  for(unsigned int i=0;i<4;i++) {
+  for(unsigned int i=0;i<5;i++) {
    NSString *s=[NSString stringWithFormat:@"%u",i+1];
    assert(workspaceIndex(key(s,NSEventModifierFlagCommand))==i);
    assert(workspaceIndex(key(s,NSEventModifierFlagCommand|NSEventModifierFlagCapsLock))==i);
@@ -120,7 +120,7 @@ int main(void) {
    for(NSNumber *modifier in @[@(NSEventModifierFlagControl),@(NSEventModifierFlagOption),@(NSEventModifierFlagShift)])
     assert(workspaceIndex(key(s,NSEventModifierFlagCommand|modifier.unsignedIntegerValue))==-1);
   }
-  assert(workspaceIndex(key(@"5",NSEventModifierFlagCommand))==-1);
+  assert(workspaceIndex(key(@"6",NSEventModifierFlagCommand))==-1);
   for(NSString *s in @[@"a",@"c",@"v",@"x",@"z"]) {
    assert(editingSelector(key(s,NSEventModifierFlagCommand))!=NULL);
    assert(editingSelector(key(s,0))==NULL);

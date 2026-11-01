@@ -20,7 +20,7 @@
  function receive(event){
   if(event.type==='tool_state'){
    if(restored)return;
-   const source=event.state||{};state={text:String(source.text||''),left:String(source.left||''),right:String(source.right||''),tableInput:String(source.tableInput||''),rows:Array.isArray(source.rows)?source.rows:[]};
+   const source=event.state||{};state={text:String(source.text||''),left:String(source.left||''),right:String(source.right||''),tableInput:String(source.tableInput||''),rows:Array.isArray(source.rows)?source.rows:[],trelloBoard:String(source.trelloBoard||'')};
    restored=true;$('table-input').value=state.tableInput;$('local-tools').inert=false;
    if(workspace)show(workspace);status('草稿已从本机恢复 · 离线可用');
   }else if(event.type==='tool_saved'){
@@ -53,10 +53,13 @@
  }
  function setText(instance,value){suppress=true;instance.session.setValue(value);suppress=false;}
  function show(index){
+  if(index!==4)window.cnoteTrello?.hide();
+  $('tool-status').hidden=index===4;
   workspace=index;document.body.classList.toggle('tools-open',index!==0);$('local-tools').hidden=index===0;
-  for(const [i,id]of [[1,'text-tool'],[2,'diff-tool'],[3,'csv-tool']])$(id).hidden=index!==i;
+  for(const [i,id]of [[1,'text-tool'],[2,'diff-tool'],[3,'csv-tool'],[4,'trello-tool']])$(id).hidden=index!==i;
   if(!index){if(!document.getElementById('document').hidden)window.cnote?.focusEditor();return;}
   $('local-tools').inert=!restored;if(!restored){if(!restoreRequested){restoreRequested=true;post({type:'tool_ready'});}status('正在读取本地工具草稿…');return;}
+  if(index===4){window.cnoteTrello.show();return;}
   ensureEditors();
   if(index===1){textEditor.resize();textEditor.focus();}
   if(index===2){leftEditor.resize();rightEditor.resize();leftEditor.focus();}
@@ -220,6 +223,6 @@
   if(instance&&command==='selectAll'){instance.selectAll();instance.focus();return;}
   document.execCommand(command);
  }
- window.cnoteTools={compareNote:data=>run('note-conflict','noteCompare',data),show,receive,barrier,flush,edit,get workspace(){return workspace;},get state(){captureEditors();return state;}};
+ window.cnoteTools={setTrelloBoard(id){state.trelloBoard=id;markDirty();flush();},compareNote:data=>run('note-conflict','noteCompare',data),show,receive,barrier,flush,edit,get workspace(){return workspace;},get state(){captureEditors();return state;}};
  // Read tool drafts only on the first tool switch; note startup stays independent.
 })();

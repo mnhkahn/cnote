@@ -6,9 +6,10 @@ pub enum Workspace {
     Text,
     Diff,
     Csv,
+    Trello,
 }
 impl Workspace {
-    pub const ALL: [Self; 4] = [Self::Notes, Self::Text, Self::Diff, Self::Csv];
+    pub const ALL: [Self; 5] = [Self::Notes, Self::Text, Self::Diff, Self::Csv, Self::Trello];
     pub fn index(self) -> usize {
         self as usize
     }
@@ -18,6 +19,7 @@ impl Workspace {
             Self::Text => "文本",
             Self::Diff => "Diff",
             Self::Csv => "CSV",
+            Self::Trello => "Trello",
         }
     }
     pub fn icon(self) -> &'static str {
@@ -26,6 +28,7 @@ impl Workspace {
             Self::Text => "code-slash",
             Self::Diff => "file-diff",
             Self::Csv => "table",
+            Self::Trello => "calendar-check",
         }
     }
     /// Public website entry points. URLs only select a workspace.
@@ -48,6 +51,7 @@ impl Workspace {
             ("tool", "/text") => Some(Self::Text),
             ("tool", "/diff") => Some(Self::Diff),
             ("tool", "/csv") => Some(Self::Csv),
+            ("tool", "/trello") => Some(Self::Trello),
             _ => None,
         }
     }
@@ -97,12 +101,13 @@ mod tests {
         }
     }
     #[test]
-    fn website_urls_select_the_four_workspaces() {
+    fn website_urls_select_all_workspaces() {
         for (url, page) in [
             ("cnote://open", Workspace::Notes),
             ("cnote://tool/text", Workspace::Text),
             ("cnote://tool/diff", Workspace::Diff),
             ("cnote://tool/csv", Workspace::Csv),
+            ("cnote://tool/trello", Workspace::Trello),
         ] {
             assert_eq!(Workspace::from_url(url), Some(page));
             assert_eq!(Workspace::from_url(&format!("{url}/")), Some(page));
@@ -131,7 +136,7 @@ mod tests {
             r#"{"type":"logout"}"#,
             r#"{"type":"delete","id":"private"}"#,
             r#"{"type":"workspace","index":-1}"#,
-            r#"{"type":"workspace","index":4}"#,
+            r#"{"type":"workspace","index":5}"#,
             r#"{"type":"workspace","index":"1"}"#,
             "invalid",
         ] {
@@ -251,6 +256,11 @@ pub fn smoke_script(page: Workspace) -> String {
             "cnoteTools.workspace===3&&!document.getElementById('local-tools').inert",
             "document.getElementById('table-input').value='name,n\\nx,10\\ny,2';document.getElementById('table-import').click();",
             "cnoteTools.state.rows.length===3&&cnoteTools.state.rows[1][0]==='x'",
+        ),
+        Workspace::Trello => (
+            "window.cnoteTrello",
+            "",
+            "!document.getElementById('trello-tool').hidden",
         ),
         Workspace::Notes => return String::new(),
     };

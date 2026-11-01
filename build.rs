@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=CNOTE_TRELLO_API_KEY");
     println!("cargo:rerun-if-env-changed=CNOTE_APP_VERSION");
     let version = std::env::var("CNOTE_APP_VERSION")
         .unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").unwrap());

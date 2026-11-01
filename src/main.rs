@@ -7,6 +7,7 @@ mod menus;
 mod note_title;
 mod store;
 mod theme;
+mod trello;
 mod ui;
 mod updater;
 mod workspace;

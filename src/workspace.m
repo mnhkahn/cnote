@@ -26,7 +26,7 @@ static NSInteger workspaceIndex(NSEvent *event) {
     if (event.type != NSEventTypeKeyDown || !(flags & NSEventModifierFlagCommand)
         || flags & (NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift)) return -1;
     NSString *key = event.charactersIgnoringModifiers;
-    if (key.length == 1 && [key characterAtIndex:0] >= '1' && [key characterAtIndex:0] <= '4')
+    if (key.length == 1 && [key characterAtIndex:0] >= '1' && [key characterAtIndex:0] <= '5')
         return [key characterAtIndex:0] - '1';
     return -1;
 }
@@ -158,9 +158,9 @@ void cnote_workspace_test_more_menu(void) {
 }
 // The smoke test posts real Cocoa key events while WKWebView is first responder.
 void cnote_workspace_test_key(unsigned int index) {
-    if (index > 3 || !NSApp.mainWindow) return;
+    if (index > 4 || !NSApp.mainWindow) return;
     NSString *key = [NSString stringWithFormat:@"%u", index + 1];
-    unsigned short codes[] = {18,19,20,21};
+    unsigned short codes[] = {18,19,20,21,23};
     NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint
         modifierFlags:NSEventModifierFlagCommand timestamp:NSProcessInfo.processInfo.systemUptime
         windowNumber:NSApp.mainWindow.windowNumber context:nil characters:key

@@ -57,6 +57,7 @@ impl Notebook {
                                 Workspace::Text,
                                 Workspace::Diff,
                                 Workspace::Csv,
+                                Workspace::Trello,
                                 Workspace::Notes,
                             ];
                             assert_eq!(page, expected[this.smoke_shortcuts]);
@@ -83,6 +84,8 @@ impl Notebook {
         let html = include_str!("../editor/index.html")
             .replace("/* ICONS */", include_str!("../editor/icons.css"))
             .replace("/* STYLE */", include_str!("../editor/style.css"))
+            .replace("/* TRELLO_STYLE */", include_str!("../tools/trello.css"))
+            .replace("/* TRELLO_SCRIPT */", include_str!("../tools/trello.js"))
             .replace("/* TOOL_STYLE */", include_str!("../tools/style.css"))
             .replace("<!-- TOOL_HTML -->", include_str!("../tools/index.html"))
             .replace(
@@ -444,6 +447,7 @@ impl Notebook {
                     Workspace::Text,
                     Workspace::Diff,
                     Workspace::Csv,
+                    Workspace::Trello,
                     Workspace::Notes,
                 ];
                 if self.smoke_shortcuts > 0
@@ -453,6 +457,23 @@ impl Notebook {
                     eprintln!("CNOTE_SMOKE_LOCAL_TOOL_OK: {}", self.workspace.label());
                     workspace::test_key(expected[self.smoke_shortcuts]);
                 }
+            }
+            "trello" => {
+                cx.spawn(async move |this, cx| {
+                    let request = v["request"].as_u64().unwrap_or(0);
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move { crate::trello::request(v) })
+                        .await;
+                    let event = match result {
+                        Ok(data) => json!({"request":request,"data":data}),
+                        Err(error) => json!({"request":request,"error":error.to_string(),"code":crate::trello::error_code(&error)}),
+                    };
+                    let _ = this.update(cx, |this, _| {
+                        this.js(&format!("window.cnoteTrello?.receive({event})"))
+                    });
+                })
+                .detach();
             }
             "workspace" => {
                 if let Some(page) = Workspace::from_message(&v.to_string()) {
