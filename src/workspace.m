@@ -4,6 +4,54 @@
 #include <stdint.h>
 #include <string.h>
 
+// Each image export owns a fresh panel and keeps it alive until its callback.
+// Schedule presentation outside GPUI's update and attach it to the main window.
+static NSSavePanel *imageSavePanel;
+static BOOL imageSavePending = NO;
+int cnote_image_save_prompt(const char *directory, const char *name, void *context,
+                           void (*callback)(void *, int, const char *)) {
+    if (![NSThread isMainThread] || imageSavePending || !directory || !name || !callback) return 0;
+    NSWindow *parent = NSApp.mainWindow;
+    if (!parent || !parent.visible || parent.attachedSheet) return 0;
+    NSString *folder = [NSString stringWithUTF8String:directory];
+    NSString *filename = [NSString stringWithUTF8String:name];
+    if (!folder || !filename) return 0;
+    imageSavePending = YES;
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopDefaultMode, ^{
+        __block BOOL completed = NO;
+        void (^finish)(int, const char *) = ^(int status, const char *path) {
+            if (completed) return;
+            completed = YES;
+            imageSavePanel = nil;
+            imageSavePending = NO;
+            NSLog(@"CNote image save panel: %@", status == 1 ? @"selected" : status == 0 ? @"cancelled" : @"failed");
+            callback(context, status, path);
+        };
+        @try {
+            if (!parent.visible || parent.attachedSheet) { finish(-1, NULL); return; }
+            imageSavePanel = [[NSSavePanel alloc] init];
+            imageSavePanel.directoryURL = [NSURL fileURLWithPath:folder isDirectory:YES];
+            imageSavePanel.nameFieldStringValue = filename;
+            imageSavePanel.canCreateDirectories = YES;
+            [imageSavePanel beginSheetModalForWindow:parent completionHandler:^(NSModalResponse response) {
+                NSURL *url = imageSavePanel.URL;
+                if (response == NSModalResponseOK && url.isFileURL) {
+                    finish(1, url.fileSystemRepresentation);
+                } else {
+                    finish(response == NSModalResponseCancel ? 0 : -1, NULL);
+                }
+            }];
+            NSLog(@"CNote image save panel: presented");
+        } @catch (NSException *exception) {
+            // Do not log file names, paths, or exception userInfo.
+            NSLog(@"CNote image save panel: presentation exception");
+            finish(-1, NULL);
+        }
+    });
+    CFRunLoopWakeUp(CFRunLoopGetMain());
+    return 1;
+}
+
 // Update the existing item without asking Security.framework to return its
 // old secret. keyring's set_password performs a second password read first.
 int32_t cnote_keychain_write(const char *service, const char *account,

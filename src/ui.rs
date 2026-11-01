@@ -465,8 +465,13 @@ impl Notebook {
                     workspace::test_key(expected[self.smoke_shortcuts]);
                 }
             }
+            "trello" if v["op"] == "copy_image" => self.copy_trello_image(v, cx),
             "trello" if v["op"] == "download" => self.download_trello_image(v, cx),
             "trello" => {
+                if smoke() && std::env::var_os("CNOTE_IMAGE_SAVE_TEST").is_some() {
+                    self.js(&format!("window.cnoteTrelloNativeFixture({v})"));
+                    return;
+                }
                 cx.spawn(async move |this, cx| {
                     let request = v["request"].as_u64().unwrap_or(0);
                     let result = cx
@@ -499,6 +504,15 @@ impl Notebook {
                 let _ = self.tx.send(Command::Web(v));
                 if smoke() {
                     eprintln!("CNOTE_SMOKE_READY");
+                    if std::env::var_os("CNOTE_IMAGE_SAVE_TEST").is_some() {
+                        use base64::Engine;
+                        let image = base64::engine::general_purpose::STANDARD
+                            .encode(include_bytes!("../assets/note.png"));
+                        self.js(&include_str!("../tests/trello-native-fixture.js")
+                            .replace("__PNG__", &image));
+                        self.switch_workspace(Workspace::Trello, window, cx);
+                        return;
+                    }
                     if let Some(view) = &self.view {
                         let _ = view.focus();
                     }
@@ -552,6 +566,54 @@ impl Notebook {
             }
         }
     }
+    fn trello_image_bytes(v: Value) -> anyhow::Result<Vec<u8>> {
+        use base64::Engine;
+        // Reuse original bytes already loaded by the viewer; never save a thumbnail.
+        let data = if v["image"].is_object() {
+            v["image"].clone()
+        } else {
+            crate::trello::request(json!({
+                "op":"attachment", "id":v["id"],
+                "attachment":v["attachment"], "original":true
+            }))?
+        };
+        anyhow::ensure!(
+            data["mime"]
+                .as_str()
+                .is_some_and(|mime| mime.starts_with("image/")),
+            "附件不是图片"
+        );
+        let encoded = data["base64"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("图片数据缺失"))?;
+        const LIMIT: usize = 25 * 1024 * 1024;
+        anyhow::ensure!(encoded.len() <= LIMIT.div_ceil(3) * 4, "图片超过 25 MB");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
+        anyhow::ensure!(
+            !bytes.is_empty() && bytes.len() <= LIMIT,
+            "图片为空或超过 25 MB"
+        );
+        Ok(bytes)
+    }
+
+    fn copy_trello_image(&self, v: Value, cx: &mut Context<Self>) {
+        let request = v["request"].as_u64().unwrap_or(0);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { Self::trello_image_bytes(v) })
+                .await;
+            let _ = this.update(cx, |this, _| {
+                let result = result.and_then(|bytes| workspace::copy_image(&bytes, ""));
+                let event = match result {
+                    Ok(()) => json!({"request":request,"data":{"copied":true}}),
+                    Err(error) => json!({"request":request,"error":error.to_string()}),
+                };
+                this.js(&format!("window.cnoteTrello?.receive({event})"));
+            });
+        })
+        .detach();
+    }
     fn download_trello_image(&self, v: Value, cx: &mut Context<Self>) {
         let request = v["request"].as_u64().unwrap_or(0);
         let name = v["name"]
@@ -562,30 +624,24 @@ impl Notebook {
         let directory = directories::UserDirs::new()
             .and_then(|dirs| dirs.download_dir().map(PathBuf::from))
             .unwrap_or_else(std::env::temp_dir);
-        let prompt = cx.prompt_for_new_path(&directory, Some(&name));
+        let prompt = workspace::prompt_image_save(&directory, &name);
         cx.spawn(async move |this, cx| {
-            let result: anyhow::Result<Value> = match prompt.await {
+            let result: anyhow::Result<Value> = match prompt.recv().await {
                 Ok(Ok(Some(path))) => {
+                    let _ = this.update(cx, |this, _| {
+                        this.js(&format!("window.cnoteTrello?.receive({})",
+                            json!({"request":request,"progress":"正在下载原图…"})));
+                    });
                     cx.background_executor().spawn(async move {
-                        use base64::Engine;
-                        let data = crate::trello::request(json!({
-                            "op":"attachment", "id":v["id"],
-                            "attachment":v["attachment"], "original":true
-                        }))?;
-                        anyhow::ensure!(
-                            data["mime"].as_str().is_some_and(|mime| mime.starts_with("image/")),
-                            "附件不是图片"
-                        );
-                        let bytes = base64::engine::general_purpose::STANDARD.decode(
-                            data["base64"].as_str().ok_or_else(|| anyhow::anyhow!("图片数据缺失"))?
-                        )?;
+                        let bytes = Self::trello_image_bytes(v)?;
                         std::fs::write(path, bytes)
                             .map_err(|_| anyhow::anyhow!("图片保存失败，请检查目标目录权限和可用空间"))?;
                         Ok(json!({"saved":true}))
                     }).await
                 }
                 Ok(Ok(None)) => Ok(json!({"saved":false})),
-                _ => Err(anyhow::anyhow!("无法打开图片保存窗口，请重试")),
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(anyhow::anyhow!("图片保存窗口未返回结果，请重试")),
             };
             let event = match result {
                 Ok(data) => json!({"request":request,"data":data}),

@@ -211,6 +211,7 @@ fn attachment_redirect_allowed(url: &url::Url) -> bool {
 }
 impl Api {
     fn attachment(&self, card: &str, id: &str, original: bool) -> Result<Value> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(45);
         let attachment = self.get(&format!("/cards/{card}/attachments/{id}"), &[])?;
         anyhow::ensure!(
             attachment["isUpload"] == true,
@@ -248,7 +249,11 @@ impl Api {
             25 * 1024 * 1024
         };
         for _ in 0..6 {
-            let mut request = self.client.get(url.clone());
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .context("附件下载超时，请重试")?;
+            let mut request = self.client.get(url.clone()).timeout(remaining);
             if authorized_attachment_host(&url) {
                 request = request.header(
                     reqwest::header::AUTHORIZATION,
@@ -258,9 +263,13 @@ impl Api {
                     ),
                 );
             }
-            let response = request
-                .send()
-                .map_err(|_| anyhow::anyhow!("附件加载失败，请检查网络后重试"))?;
+            let response = request.send().map_err(|error| {
+                if error.is_timeout() {
+                    anyhow::anyhow!("附件下载超时，请重试")
+                } else {
+                    anyhow::anyhow!("附件加载失败，请检查网络后重试")
+                }
+            })?;
             if response.status().is_redirection() {
                 let location = response
                     .headers()

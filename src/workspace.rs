@@ -147,7 +147,70 @@ mod tests {
 
 static SHORTCUTS: std::sync::OnceLock<async_channel::Sender<Workspace>> =
     std::sync::OnceLock::new();
+type ImageSaveResult = anyhow::Result<Option<std::path::PathBuf>>;
+extern "C" fn image_save_selected(
+    context: *mut std::ffi::c_void,
+    status: std::ffi::c_int,
+    path: *const std::ffi::c_char,
+) {
+    // Native code calls exactly once for every accepted request. Copy the path
+    // while its NSURL is still alive; no Cocoa object crosses threads.
+    let sender = unsafe { Box::from_raw(context.cast::<async_channel::Sender<ImageSaveResult>>()) };
+    let result = match status {
+        1 if !path.is_null() => {
+            use std::os::unix::ffi::OsStrExt;
+            let path = unsafe { std::ffi::CStr::from_ptr(path) };
+            Ok(Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+                path.to_bytes(),
+            ))))
+        }
+        0 => Ok(None),
+        _ => Err(anyhow::anyhow!("保存窗口异常关闭，请重新选择下载")),
+    };
+    let _ = sender.try_send(result);
+}
+/// Must be called on the Cocoa main thread, like other workspace UI adapters.
+pub fn prompt_image_save(
+    directory: &std::path::Path,
+    name: &str,
+) -> async_channel::Receiver<ImageSaveResult> {
+    let (sender, receiver) = async_channel::bounded(1);
+    let result: anyhow::Result<()> = (|| {
+        let directory = std::ffi::CString::new(
+            directory
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("保存目录格式无效"))?,
+        )?;
+        let name = std::ffi::CString::new(name)?;
+        let context = Box::into_raw(Box::new(sender.clone()));
+        let accepted = unsafe {
+            cnote_image_save_prompt(
+                directory.as_ptr(),
+                name.as_ptr(),
+                context.cast(),
+                image_save_selected,
+            )
+        };
+        if accepted == 0 {
+            unsafe {
+                drop(Box::from_raw(context));
+            }
+            anyhow::bail!("无法打开保存窗口：请先关闭已有对话框并重试");
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = sender.try_send(Err(error));
+    }
+    receiver
+}
 unsafe extern "C" {
+    fn cnote_image_save_prompt(
+        directory: *const std::ffi::c_char,
+        name: *const std::ffi::c_char,
+        context: *mut std::ffi::c_void,
+        callback: extern "C" fn(*mut std::ffi::c_void, std::ffi::c_int, *const std::ffi::c_char),
+    ) -> std::ffi::c_int;
     fn cnote_copy_image(
         bytes: *const u8,
         length: usize,

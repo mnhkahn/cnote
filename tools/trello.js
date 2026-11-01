@@ -2,15 +2,15 @@
 (() => {
  const root=document.getElementById('trello-tool');
  let selected=new Date(),boards=[],lists=[],cards=[],board='',loaded=false,busy=false,serial=0,boardEpoch=0,detailEpoch=0,connected=false,apiKey='';
- const pending=new Map(),mediaUrls=new Set(),originalImages=new Map();
+ const pending=new Map(),mediaUrls=new Set(),originalImages=new Map(),originalData=new Map();
  let imageViewer=null,autoTimer=null,active=false,lastRefreshAt=0;
  const AUTO_REFRESH_MS=60000;
  const dayKey=date=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
  const dueDay=card=>card.due&&Number.isFinite(new Date(card.due).getTime())?dayKey(new Date(card.due)):'';
  function node(tag,text,cls){const el=document.createElement(tag);if(text!=null)el.textContent=text;if(cls)el.className=cls;return el;}
  function button(text,action,cls){const el=node('button',text,cls);el.type='button';el.onclick=action;return el;}
- function request(op,id,extra={}){return new Promise((resolve,reject)=>{const request=++serial;pending.set(request,{resolve,reject});window.ipc.postMessage(JSON.stringify({type:'trello',request,op,id,...extra}));});}
- function receive(event){const item=pending.get(event.request);if(!item)return;pending.delete(event.request);event.error?item.reject(Object.assign(Error(event.error),{code:event.code})):item.resolve(event.data);}
+ function request(op,id,extra={},progress){return new Promise((resolve,reject)=>{const request=++serial;pending.set(request,{resolve,reject,progress});window.ipc.postMessage(JSON.stringify({type:'trello',request,op,id,...extra}));});}
+ function receive(event){const item=pending.get(event.request);if(!item)return;if(event.progress){item.progress?.(event.progress);return;}pending.delete(event.request);event.error?item.reject(Object.assign(Error(event.error),{code:event.code})):item.resolve(event.data);}
  function message(text,error=false){const el=document.getElementById('trello-message');if(el){el.textContent=text;el.dataset.error=String(error);}}
  function guide(error,settings=false,reauthorize=false){
   const panel=document.getElementById('trello-content');panel.replaceChildren();const box=node('div',null,'trello-guide');
@@ -93,7 +93,7 @@
   finally{if(epoch===boardEpoch)scheduleAutoRefresh();}
  }
  function removeDetail(){
-  closeImageViewer();originalImages.clear();
+  closeImageViewer();originalImages.clear();originalData.clear();
   const detail=document.getElementById('trello-detail');
   detail?.querySelectorAll('audio,video').forEach(media=>media.pause());
   detail?.remove();for(const url of mediaUrls)URL.revokeObjectURL(url);mediaUrls.clear();
@@ -103,19 +103,29 @@
   image.addEventListener('contextmenu',event=>{
    event.preventDefault();event.stopPropagation();
    root.querySelector('.trello-image-menu')?.remove();
-   const menu=node('div',null,'trello-image-menu');menu.setAttribute('popover','auto');menu.setAttribute('role','menu');
+   const menu=node('div',null,'trello-image-menu');menu.setAttribute('popover','manual');menu.setAttribute('role','menu');
+   const listeners=new AbortController();
+   const closeMenu=()=>{listeners.abort();if(menu.matches(':popover-open'))menu.hidePopover();menu.remove();};
+   document.addEventListener('pointerdown',event=>{if(!menu.contains(event.target))closeMenu();},{capture:true,signal:listeners.signal});
    const save=button(saving?'正在下载原图…':'下载原图',async()=>{
-    if(saving)return;menu.hidePopover();saving=true;feedback('正在下载原图…');
-    try{const result=await request('download',cardId,{attachment:attachment.id,name:attachment.name});feedback(result.saved?'原图已保存':'已取消保存');}
+    if(saving)return;closeMenu();saving=true;feedback('请选择图片保存位置…');
+    try{const result=await request('download',cardId,{attachment:attachment.id,name:attachment.name,image:originalData.get(attachment.id)},feedback);feedback(result.saved?'原图已保存':'已取消保存');}
     catch(error){feedback('下载失败：'+error.message);}
     finally{saving=false;}
-   });save.disabled=saving;save.setAttribute('role','menuitem');menu.append(save);
+   });save.disabled=saving;save.setAttribute('role','menuitem');
+   const copy=button('复制图片',async()=>{
+    closeMenu();feedback('正在复制原图…');
+    try{await request('copy_image',cardId,{attachment:attachment.id,image:originalData.get(attachment.id)});feedback('图片已复制');}
+    catch(error){feedback('复制失败：'+error.message);}
+   });copy.setAttribute('role','menuitem');
+   const open=button('在页面中打开',()=>{closeMenu();openLink(attachment.url);});open.setAttribute('role','menuitem');
+   menu.append(copy,open,save);
    menu.addEventListener('click',event=>event.stopPropagation());
    (image.closest('dialog')||root).append(menu);menu.showPopover();
    menu.style.left=Math.max(8,Math.min(event.clientX,innerWidth-menu.offsetWidth-8))+'px';
    menu.style.top=Math.max(8,Math.min(event.clientY,innerHeight-menu.offsetHeight-8))+'px';
-   menu.addEventListener('keydown',event=>event.stopPropagation());
-   menu.addEventListener('toggle',()=>{if(!menu.matches(':popover-open'))menu.remove();});save.focus();
+   menu.addEventListener('keydown',event=>{event.stopPropagation();if(event.key==='Escape'){event.preventDefault();closeMenu();image.focus();}});
+   menu.addEventListener('toggle',()=>{if(!menu.matches(':popover-open'))closeMenu();});save.focus();
   });
  }
  function closeImageViewer(){if(imageViewer){const current=imageViewer;imageViewer=null;current.observer.disconnect();current.dialog.close();current.dialog.remove();}}
@@ -133,6 +143,7 @@
   toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','图片查看工具');
   toolbar.append(title,iconButton('缩小','zoom-out','-',actions.zoomOut),zoom,iconButton('放大','zoom-in','+',actions.zoomIn),iconButton('适应窗口','fullscreen-exit','0',actions.fit),iconButton('原始大小','arrows-fullscreen','1',actions.actual),iconButton('逆时针旋转','arrow-counterclockwise','Shift+R',actions.left),iconButton('顺时针旋转','arrow-clockwise','R',actions.right),iconButton('关闭图片','x-lg','Escape',closeImageViewer));
   dialog.addEventListener('keydown',event=>{
+   if(event.target.closest('.trello-image-menu'))return;
    if(event.isComposing||event.altKey)return;
    const key=event.key;let action;
    if(key==='+'||key==='='||event.code==='NumpadAdd')action=actions.zoomIn;
@@ -153,10 +164,10 @@
    status.replaceChildren(node('span','正在加载原图…'));
    try{
     let original=originalImages.get(attachment.id);
-    if(!original){original=request('attachment',cardId,{attachment:attachment.id,original:true}).then(result=>{if(epoch!==detailEpoch)return null;if(!result.mime?.startsWith('image/'))throw Error('附件不是可预览的图片');const bytes=Uint8Array.from(atob(result.base64),c=>c.charCodeAt(0));const url=URL.createObjectURL(new Blob([bytes],{type:result.mime}));mediaUrls.add(url);return url;});originalImages.set(attachment.id,original);}
+    if(!original){original=request('attachment',cardId,{attachment:attachment.id,original:true}).then(result=>{if(epoch!==detailEpoch)return null;if(!result.mime?.startsWith('image/'))throw Error('附件不是可预览的图片');originalData.set(attachment.id,result);const bytes=Uint8Array.from(atob(result.base64),c=>c.charCodeAt(0));const url=URL.createObjectURL(new Blob([bytes],{type:result.mime}));mediaUrls.add(url);return url;});originalImages.set(attachment.id,original);}
     const url=await original;if(!url||imageViewer!==current||epoch!==detailEpoch)return;
-    image.onload=()=>{if(imageViewer===current){layout();status.textContent=`原图 · ${image.naturalWidth} × ${image.naturalHeight} 像素`;}};image.onerror=()=>{if(imageViewer===current){originalImages.delete(attachment.id);URL.revokeObjectURL(url);mediaUrls.delete(url);image.onerror=null;image.src=thumbnail;status.replaceChildren(node('span','原图无法解码'),button('重试原图',loadOriginal));}};image.src=url;
-   }catch(error){originalImages.delete(attachment.id);if(imageViewer===current&&epoch===detailEpoch)status.replaceChildren(node('span',error.message),button('重试原图',loadOriginal));}
+    image.onload=()=>{if(imageViewer===current){layout();status.textContent=`原图 · ${image.naturalWidth} × ${image.naturalHeight} 像素`;}};image.onerror=()=>{if(imageViewer===current){originalImages.delete(attachment.id);originalData.delete(attachment.id);URL.revokeObjectURL(url);mediaUrls.delete(url);image.onerror=null;image.src=thumbnail;status.replaceChildren(node('span','原图无法解码'),button('重试原图',loadOriginal));}};image.src=url;
+   }catch(error){originalImages.delete(attachment.id);originalData.delete(attachment.id);if(imageViewer===current&&epoch===detailEpoch)status.replaceChildren(node('span',error.message),button('重试原图',loadOriginal));}
   };loadOriginal();
  }
  function renderAttachments(body,attachments,cardId,epoch){
