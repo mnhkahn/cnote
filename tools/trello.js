@@ -108,7 +108,23 @@
   const layout=()=>{if(!image.naturalWidth)return;const swapped=rotation%180!==0,w=swapped?image.naturalHeight:image.naturalWidth,h=swapped?image.naturalWidth:image.naturalHeight;if(fit)scale=Math.min((viewport.clientWidth-24)/w,(viewport.clientHeight-24)/h,1);scale=Math.max(.01,scale);stage.style.width=Math.max(viewport.clientWidth,w*scale+24)+'px';stage.style.height=Math.max(viewport.clientHeight,h*scale+24)+'px';image.style.width=image.naturalWidth*scale+'px';image.style.height=image.naturalHeight*scale+'px';image.style.transform=`translate(-50%,-50%) rotate(${rotation}deg)`;zoom.textContent=Math.round(scale*100)+'%';viewport.scrollLeft=(stage.offsetWidth-viewport.clientWidth)/2;viewport.scrollTop=(stage.offsetHeight-viewport.clientHeight)/2;};
   const zoom=node('span','100%','trello-image-zoom');
   const changeScale=factor=>{fit=false;scale=Math.min(8,Math.max(.01,scale*factor));layout();};
-  toolbar.append(title,button('缩小',()=>changeScale(1/1.25)),zoom,button('放大',()=>changeScale(1.25)),button('适应窗口',()=>{fit=true;layout();}),button('原始大小',()=>{fit=false;scale=1;layout();}),button('逆时针旋转',()=>{rotation=(rotation+270)%360;layout();}),button('顺时针旋转',()=>{rotation=(rotation+90)%360;layout();}),button('关闭图片',closeImageViewer));
+  const actions={zoomOut:()=>changeScale(1/1.25),zoomIn:()=>changeScale(1.25),fit:()=>{fit=true;layout();},actual:()=>{fit=false;scale=1;layout();},left:()=>{rotation=(rotation+270)%360;layout();},right:()=>{rotation=(rotation+90)%360;layout();}};
+  const iconButton=(label,icon,shortcut,action)=>{const control=button('',action,'trello-image-icon');control.setAttribute('aria-label',label);control.setAttribute('aria-keyshortcuts',shortcut==='+'?'Plus':shortcut);control.title=`${label}（${shortcut}）`;const glyph=node('i',null,'bi bi-'+icon);glyph.setAttribute('aria-hidden','true');control.append(glyph);return control;};
+  toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','图片查看工具');
+  toolbar.append(title,iconButton('缩小','zoom-out','-',actions.zoomOut),zoom,iconButton('放大','zoom-in','+',actions.zoomIn),iconButton('适应窗口','fullscreen-exit','0',actions.fit),iconButton('原始大小','arrows-fullscreen','1',actions.actual),iconButton('逆时针旋转','arrow-counterclockwise','Shift+R',actions.left),iconButton('顺时针旋转','arrow-clockwise','R',actions.right),iconButton('关闭图片','x-lg','Escape',closeImageViewer));
+  dialog.addEventListener('keydown',event=>{
+   if(event.isComposing||event.altKey)return;
+   const key=event.key;let action;
+   if(key==='+'||key==='='||event.code==='NumpadAdd')action=actions.zoomIn;
+   else if(key==='-'||event.code==='NumpadSubtract')action=actions.zoomOut;
+   else if(!event.metaKey&&!event.ctrlKey){
+    if(key==='0')action=actions.fit;else if(key==='1')action=actions.actual;
+    else if(event.code==='KeyR')action=event.shiftKey?actions.left:actions.right;
+    else if(key==='Escape')action=closeImageViewer;
+    else if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(key))action=()=>{const distance=event.shiftKey?240:80;viewport.scrollBy(key==='ArrowLeft'?-distance:key==='ArrowRight'?distance:0,key==='ArrowUp'?-distance:key==='ArrowDown'?distance:0);};
+   }
+   if(action){event.preventDefault();event.stopImmediatePropagation();action();}
+  },true);
   dialog.append(toolbar,status,viewport);root.append(dialog);const observer=new ResizeObserver(()=>{if(fit)layout();});const current={dialog,observer};imageViewer=current;dialog.addEventListener('cancel',event=>{event.preventDefault();closeImageViewer();});dialog.showModal();observer.observe(viewport);
   image.onload=layout;image.src=thumbnail;
   let drag=null;viewport.onpointerdown=event=>{if(event.button!==0)return;drag={x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop};viewport.setPointerCapture(event.pointerId);viewport.classList.add('dragging');event.preventDefault();};viewport.onpointermove=event=>{if(drag){viewport.scrollLeft=drag.left+drag.x-event.clientX;viewport.scrollTop=drag.top+drag.y-event.clientY;}};viewport.onpointerup=viewport.onpointercancel=()=>{drag=null;viewport.classList.remove('dragging');};
@@ -124,15 +140,13 @@
  }
  function renderAttachments(body,attachments,cardId,epoch){
   const date=attachment=>{const value=Date.parse(attachment.date||'');return Number.isFinite(value)?value:0;};
-  const queue=[];
+  const queue=[],gallery=node('div',null,'trello-attachments-grid');body.append(gallery);
   for(const attachment of [...attachments].sort((a,b)=>date(b)-date(a))){
    const figure=node('figure',null,'trello-attachment-preview'),caption=node('figcaption');
-   const info=node('div');info.append(node('strong',attachment.name||'附件'),node('small',date(attachment)?`上传于 ${new Date(date(attachment)).toLocaleString()}`:'上传时间未知'));
-   let thumbnailUrl=null;
+   const info=node('div'),name=node('strong',attachment.name||'附件');name.title=attachment.name||'附件';info.append(name,node('small',date(attachment)?`上传于 ${new Date(date(attachment)).toLocaleString()}`:'上传时间未知'));
    const knownImage=attachment.mimeType?.startsWith('image/')||/\.(jpe?g|png|webp|gif|avif|heic|heif|bmp|tiff?)$/i.test(attachment.name||'');
-   const enlarge=button('放大查看',()=>openImageViewer(attachment,cardId,epoch,thumbnailUrl));enlarge.disabled=true;
-   caption.append(info,knownImage?enlarge:button('打开原附件',()=>openLink(attachment.url)));
-   const preview=node('div',attachment.isUpload===false?(knownImage?'外部图片附件暂不支持本地读取。':'外部链接附件，可打开原附件查看。'):'正在加载附件…','trello-attachment-content');figure.append(caption,preview);body.append(figure);
+   figure.classList.toggle('trello-image-tile',knownImage);caption.append(info);if(!knownImage)caption.append(button('打开原附件',()=>openLink(attachment.url)));
+   const preview=node('div',attachment.isUpload===false?(knownImage?'外部图片附件暂不支持本地读取。':'外部链接附件，可打开原附件查看。'):'正在加载附件…','trello-attachment-content');figure.append(caption,preview);gallery.append(figure);
    if(attachment.isUpload===false)continue;
    const load=async()=>{
     if(epoch!==detailEpoch||!preview.isConnected)return;
@@ -144,7 +158,7 @@
      const bytes=Uint8Array.from(atob(result.base64),c=>c.charCodeAt(0)),mime=result.mime||'';
      if(mime.startsWith('text/')||mime==='application/json'){preview.replaceChildren(node('pre',new TextDecoder().decode(bytes)));return;}
      const url=URL.createObjectURL(new Blob([bytes],{type:mime}));mediaUrls.add(url);let media;
-     if(mime.startsWith('image/')){media=node('img');media.alt=attachment.name||'附件图片';thumbnailUrl=url;enlarge.disabled=false;caption.replaceChildren(info,enlarge);}
+     if(mime.startsWith('image/')){media=node('img');media.alt=attachment.name||'附件图片';figure.classList.add('trello-image-tile');caption.replaceChildren(info);}
      else if(mime.startsWith('audio/')||mime.startsWith('video/')){media=node(mime.startsWith('audio/')?'audio':'video');media.controls=true;media.preload='metadata';media.setAttribute('aria-label',attachment.name||'附件');if(media.tagName==='VIDEO')media.playsInline=true;}
      else if(mime==='application/pdf'){media=node('iframe');media.title=attachment.name||'PDF 附件';media.setAttribute('sandbox','');}
      else {URL.revokeObjectURL(url);mediaUrls.delete(url);failed('此附件暂不支持内嵌预览，请打开原附件。');return;}
