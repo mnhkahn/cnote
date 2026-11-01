@@ -217,7 +217,7 @@ fn attachment_redirect_allowed(url: &url::Url) -> bool {
         })
 }
 impl Api {
-    fn attachment(&self, card: &str, id: &str) -> Result<Value> {
+    fn attachment(&self, card: &str, id: &str, original: bool) -> Result<Value> {
         let attachment = self.get(&format!("/cards/{card}/attachments/{id}"), &[])?;
         anyhow::ensure!(
             attachment["isUpload"] == true,
@@ -229,12 +229,12 @@ impl Api {
             .unwrap()
             .pop_if_empty()
             .push(attachment["name"].as_str().unwrap_or("attachment"));
-        // Prefer a readable preview for photos to avoid downloading very large originals.
-        if mime.starts_with("image/") {
+        // Thumbnails use previews; the local viewer explicitly requests original bytes.
+        if !original && mime.starts_with("image/") {
             if let Some(preview) = attachment["previews"].as_array().and_then(|items| {
                 items
                     .iter()
-                    .filter(|p| p["width"].as_u64().is_some_and(|w| w <= 1600))
+                    .filter(|p| p["width"].as_u64().is_some_and(|w| w <= 480))
                     .max_by_key(|p| p["width"].as_u64().unwrap_or(0))
             }) {
                 if let Some(value) = preview["url"].as_str() {
@@ -386,7 +386,7 @@ pub fn request(v: Value) -> Result<Value> {
                 id.len() == 24 && id.bytes().all(|b| b.is_ascii_hexdigit()),
                 "无效的附件 ID"
             );
-            api.attachment(card, id)
+            api.attachment(card, id, v["original"].as_bool().unwrap_or(false))
         }
         "card" => {
             let id = identifier(&v)?;
@@ -563,6 +563,7 @@ mod tests {
             .attachment(
                 card["id"].as_str().unwrap(),
                 attachment["id"].as_str().unwrap(),
+                false,
             )
             .unwrap();
         assert!(data["mime"].as_str().unwrap().starts_with("image/"));
@@ -570,6 +571,19 @@ mod tests {
             .decode(data["base64"].as_str().unwrap())
             .unwrap();
         assert!(bytes.len() > 100);
+        let original = api
+            .attachment(
+                card["id"].as_str().unwrap(),
+                attachment["id"].as_str().unwrap(),
+                true,
+            )
+            .unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(original["base64"].as_str().unwrap())
+            .unwrap();
+        if let Some(size) = attachment["bytes"].as_u64() {
+            assert_eq!(bytes.len() as u64, size);
+        }
     }
     #[test]
     fn session_restores_saved_credentials_once_and_retries_keychain_errors() {
