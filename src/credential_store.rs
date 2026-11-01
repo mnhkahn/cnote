@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::OpenOptions,
+    io::{Read, Seek, SeekFrom, Write},
     sync::{Mutex, OnceLock},
 };
 
@@ -31,6 +32,14 @@ trait Backend {
     fn write(&self, account: &str, value: &str) -> Result<()>;
     fn delete(&self, account: &str) -> Result<()>;
 }
+unsafe extern "C" {
+    fn cnote_keychain_write(
+        service: *const std::ffi::c_char,
+        account: *const std::ffi::c_char,
+        bytes: *const u8,
+        length: usize,
+    ) -> i32;
+}
 struct Keychain;
 impl Backend for Keychain {
     fn read(&self, account: &str) -> Result<Option<String>> {
@@ -38,14 +47,27 @@ impl Backend for Keychain {
         match entry.get_password() {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(_) => anyhow::bail!("无法读取 CNote 系统钥匙串，请检查钥匙串访问权限"),
+            Err(_) => {
+                anyhow::bail!("无法读取 CNote 钥匙串条目「{account}」：未获授权或系统访问失败")
+            }
         }
     }
     fn write(&self, account: &str, value: &str) -> Result<()> {
-        keyring::Entry::new(SERVICE, account)
-            .context("无法访问 CNote 系统钥匙串")?
-            .set_password(value)
-            .map_err(|_| anyhow::anyhow!("无法保存 CNote 系统钥匙串凭据"))
+        let service = std::ffi::CString::new(SERVICE)?;
+        let account = std::ffi::CString::new(account)?;
+        let status = unsafe {
+            cnote_keychain_write(
+                service.as_ptr(),
+                account.as_ptr(),
+                value.as_ptr(),
+                value.len(),
+            )
+        };
+        anyhow::ensure!(
+            status == 0,
+            "无法保存 CNote 系统钥匙串凭据（系统错误 {status}）"
+        );
+        Ok(())
     }
     fn delete(&self, account: &str) -> Result<()> {
         match keyring::Entry::new(SERVICE, account)
@@ -60,6 +82,8 @@ impl Backend for Keychain {
 struct Store<B> {
     backend: B,
     cached: Option<Document>,
+    // Non-secret generation of the shared lock file; never a credential digest.
+    generation: String,
 }
 impl<B: Backend> Store<B> {
     fn load(&self) -> Result<Document> {
@@ -73,6 +97,12 @@ impl<B: Backend> Store<B> {
             "CNote 钥匙串版本不受支持，未覆盖原记录"
         );
         Ok(document)
+    }
+    fn current(&self) -> Result<Document> {
+        match &self.cached {
+            Some(document) => Ok(document.clone()),
+            None => self.load(),
+        }
     }
     fn persist(&mut self, document: Document) -> Result<()> {
         let value = serde_json::to_string(&document).context("无法编码 CNote 凭据")?;
@@ -89,7 +119,7 @@ impl<B: Backend> Store<B> {
         {
             return Ok(value.clone());
         }
-        let mut document = self.load()?;
+        let mut document = self.current()?;
         if let Some(value) = document.entries.get(account) {
             let result = value.clone();
             self.cached = Some(document);
@@ -106,14 +136,14 @@ impl<B: Backend> Store<B> {
         Ok(value)
     }
     fn set(&mut self, account: &str, value: &str) -> Result<()> {
-        // Reload under the cross-process lock before merging so a write by the
-        // installed app cannot clobber another account saved by a developer build.
-        let mut document = self.load()?;
+        // with_store invalidates the cache when another process has accessed the
+        // store. Reuse our authorized document for token refreshes in this process.
+        let mut document = self.current()?;
         document.entries.insert(account.into(), Some(value.into()));
         self.persist(document)
     }
     fn remove(&mut self, account: &str) -> Result<()> {
-        let mut document = self.load()?;
+        let mut document = self.current()?;
         self.backend.delete(account)?;
         document.entries.insert(account.into(), None);
         self.persist(document)
@@ -132,6 +162,7 @@ fn with_store<T>(
             Mutex::new(Store {
                 backend: Keychain,
                 cached: None,
+                generation: String::new(),
             })
         })
         .lock()
@@ -148,10 +179,25 @@ fn with_store<T>(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let file = options
+    let mut file = options
         .open(directories.data_dir().join("credentials.lock"))
         .context("无法打开 CNote 凭据锁")?;
     file.lock().context("无法锁定 CNote 凭据存储")?;
+    let mut generation = String::new();
+    file.read_to_string(&mut generation)
+        .context("无法读取 CNote 凭据锁状态")?;
+    if generation != store.generation {
+        store.cached = None;
+    }
+    // Publish invalidation BEFORE touching Keychain: even a crash or a failed
+    // operation must not leave another running copy with an outdated document.
+    let generation = uuid::Uuid::new_v4().to_string();
+    file.seek(SeekFrom::Start(0))?;
+    file.set_len(0)?;
+    file.write_all(generation.as_bytes())
+        .context("无法更新 CNote 凭据锁状态")?;
+    file.sync_data().context("无法保存 CNote 凭据锁状态")?;
+    store.generation = generation;
     operation(&mut store)
     // File close releases the lock on success and on every error path.
 }
@@ -200,6 +246,7 @@ mod tests {
         Store {
             backend: Memory::default(),
             cached: None,
+            generation: String::new(),
         }
     }
     #[test]
@@ -214,6 +261,25 @@ mod tests {
         store.cached = None;
         store.backend.reads.borrow_mut().clear();
         assert_eq!(store.get("onedrive-oauth").unwrap().as_deref(), Some("one"));
+        assert_eq!(store.get("trello-auth").unwrap().as_deref(), Some("two"));
+        assert_eq!(*store.backend.reads.borrow(), vec![VAULT]);
+    }
+    #[test]
+    fn token_refresh_and_trello_reuse_the_authorized_vault() {
+        let mut store = store();
+        store.backend.values.borrow_mut().insert(
+            VAULT.into(),
+            serde_json::to_string(&Document {
+                entries: BTreeMap::from([
+                    ("onedrive-oauth".into(), Some("one".into())),
+                    ("trello-auth".into(), Some("two".into())),
+                ]),
+                ..Document::default()
+            })
+            .unwrap(),
+        );
+        assert_eq!(store.get("onedrive-oauth").unwrap().as_deref(), Some("one"));
+        store.set("onedrive-oauth", "refreshed").unwrap();
         assert_eq!(store.get("trello-auth").unwrap().as_deref(), Some("two"));
         assert_eq!(*store.backend.reads.borrow(), vec![VAULT]);
     }
@@ -273,6 +339,8 @@ mod tests {
             .values
             .borrow_mut()
             .insert(VAULT.into(), serde_json::to_string(&document).unwrap());
+        // with_store clears this cache when another process changes generation.
+        store.cached = None;
         store.set("trello-auth", "new").unwrap();
         assert_eq!(
             store.get("onedrive-oauth").unwrap().as_deref(),

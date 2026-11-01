@@ -88,7 +88,7 @@ CNote 使用独立的 Ed25519 密钥：公钥位于 `assets/update-public-key.tx
 bash scripts/configure-signing.sh
 ```
 
-私钥与公钥必须保持配对并跨版本保留。默认更新源是 `mnhkahn/cnote`；构建其他仓库时设置 `CNOTE_UPDATE_REPOSITORY=owner/repo`。首个带更新组件的版本需手动安装，此后跟踪 GitHub 最新正式 Release。发布包和本机打包使用同一份固定自签名证书，公钥位于 `assets/code-signing-cert.pem`，私钥不入库。它让钥匙串识别升级后的 CNote 为同一应用；从旧 ad-hoc 版迁移时首次可能仍需输入 Mac 密码并选“始终允许”。这不是 Touch ID 支持，也不代替 Apple Developer ID 签名或公证。
+私钥与公钥必须保持配对并跨版本保留。默认更新源是 `mnhkahn/cnote`；构建其他仓库时设置 `CNOTE_UPDATE_REPOSITORY=owner/repo`。首个带更新组件的版本需手动安装，此后跟踪 GitHub 最新正式 Release。发布包和本机打包使用同一份固定自签名证书，公钥位于 `assets/code-signing-cert.pem`，私钥不入库。固定证书使代码的 designated requirement 保持一致，但不保证登录钥匙串跨版本免授权。当前自签名包没有 TeamIdentifier，实际登录钥匙串记录的 ACL partition list 使用 `cdhash:`，程序重新编译后指纹会变化，仍可能再次要求密码；“始终允许”和统一条目也不能解决后续版本指纹变化。正式解决需要稳定的 Apple Developer ID / Team ID 签名身份及凭据授权迁移；当前构建尚未接入。这不是 Touch ID 支持，也不代替 Apple Developer ID 签名或公证。
 
 签名私钥、加密 PKCS#12 备份、随机密码和独立钥匙串保存在本机 `~/Library/Application Support/CNote/code-signing/`（目录 700、私密文件 600）。构建时只为此证书添加代码签名信任，不添加 TLS 信任；临时加入钥匙串搜索列表后会恢复并锁定。不要删除或重建这份身份；换机器时需安全备份并恢复整个目录。首次配置 / 重传 GitHub Secrets：
 
@@ -98,7 +98,7 @@ python3 scripts/code-signing.py configure --upload
 python3 scripts/test-code-signing.py
 ```
 
-`configure --upload` 把加密身份和随机密码分别写入仓库 Secrets `CNOTE_SIGNING_P12` / `CNOTE_SIGNING_PASSWORD`。发布工作流导入后先对照公钥证书，再验证两个不同版本能在禁止交互时共用测试钥匙串条目；构建结束删除临时钥匙串和构建机信任。缺失或不匹配时中止发布，不能退回 ad-hoc 签名。Sparkle 原有更新签名密钥保持独立。
+`configure --upload` 把加密身份和随机密码分别写入仓库 Secrets `CNOTE_SIGNING_P12` / `CNOTE_SIGNING_PASSWORD`。发布工作流导入后先对照公钥证书，再验证两个不同版本在独立测试钥匙串中的访问与签名一致性（不覆盖真实登录钥匙串的 partition ACL，不能据此保证升级免弹窗）；构建结束删除临时钥匙串和构建机信任。缺失或不匹配时中止发布，不能退回 ad-hoc 签名。Sparkle 原有更新签名密钥保持独立。
 
 普通 PR/分支 CI 不接触私钥，通过 `CNOTE_ALLOW_ADHOC=1 sh scripts/package.sh debug` 显式生成临时签名开发包；开发包不保证跨版本保留钥匙串授权，不能作为正式升级包，release 打包禁止这个选项。
 
@@ -159,6 +159,6 @@ CNote 内置 Trello REST API 客户端，无需安装其他程序。未关联时
 
 ### 统一钥匙串凭据迁移
 
-旧版分别使用 `onedrive-oauth` 和 `trello-auth` 条目，分别读取会触发两项独立的 macOS 访问授权。新版将两项凭据按服务分别保存到同一个 `credentials-v1` 条目，启动读取后供两个功能共用；进入 Trello 不再为已迁移的账号额外读取旧条目。钥匙串版本和访问失败不会静默覆盖原记录，进程间文件锁只保存锁状态，不保存任何凭据。
+旧版分别使用 `onedrive-oauth` 和 `trello-auth` 条目，分别读取会触发两项独立的 macOS 访问授权。新版将两项凭据按服务分别保存到同一个 `credentials-v1` 条目，启动读取后供两个功能共用；进入 Trello 不再为已迁移的账号额外读取旧条目。钥匙串版本和访问失败不会静默覆盖原记录，进程间文件锁只保存锁状态，不保存任何凭据。同一次运行中，刷新 OneDrive 令牌和进入 Trello 共用已读取的凭据缓存；保存令牌直接更新条目，不再先读取旧密码。锁文件中的随机代号用于让其他新版 CNote 进程更新缓存，不包含凭据。旧条目首次迁移仍可能分别要求授权；此优化不保证自签名应用升级后完全免弹窗。
 
-首次迁移仍可能需要授权读取旧条目，macOS 的访问控制无法由应用绕过。迁移成功后保留旧记录以便恢复；单独退出 OneDrive 或断开 Trello 时删除该服务的旧记录并持久化退出标记，不影响另一服务，也不会再次从旧条目恢复已退出的账号。正式升级仍须使用同一固定签名；本次改动未在用户设备上验证真实升级后的系统弹窗次数。
+首次迁移仍可能需要授权读取旧条目，macOS 的访问控制无法由应用绕过。迁移成功后保留旧记录以便恢复；单独退出 OneDrive 或断开 Trello 时删除该服务的旧记录并持久化退出标记，不影响另一服务，也不会再次从旧条目恢复已退出的账号。统一条目只减少分别访问多个条目的授权，不消除自签名应用的 `cdhash` 版本变化；即使固定自签名证书相同，升级后仍可能要求密码。

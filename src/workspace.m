@@ -1,5 +1,32 @@
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
+#import <Security/Security.h>
+#include <stdint.h>
+#include <string.h>
+
+// Update the existing item without asking Security.framework to return its
+// old secret. keyring's set_password performs a second password read first.
+int32_t cnote_keychain_write(const char *service, const char *account,
+                            const unsigned char *bytes, size_t length) {
+    if (!service || !account || !bytes || length > UINT32_MAX) return errSecParam;
+    SecKeychainRef keychain = NULL;
+    OSStatus status = SecKeychainCopyDefault(&keychain);
+    if (status != errSecSuccess) return status;
+    SecKeychainItemRef item = NULL;
+    status = SecKeychainFindGenericPassword(keychain,
+        (UInt32)strlen(service), service, (UInt32)strlen(account), account,
+        NULL, NULL, &item);
+    if (status == errSecSuccess) {
+        status = SecKeychainItemModifyAttributesAndData(item, NULL, (UInt32)length, bytes);
+    } else if (status == errSecItemNotFound) {
+        status = SecKeychainAddGenericPassword(keychain,
+            (UInt32)strlen(service), service, (UInt32)strlen(account), account,
+            (UInt32)length, bytes, NULL);
+    }
+    if (item) CFRelease(item);
+    CFRelease(keychain);
+    return status;
+}
 
 int cnote_copy_image(const unsigned char *bytes, size_t length, const char *html) {
     if (![NSThread isMainThread] || !bytes || !length || !html) return 0;

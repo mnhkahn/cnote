@@ -98,6 +98,26 @@
   detail?.querySelectorAll('audio,video').forEach(media=>media.pause());
   detail?.remove();for(const url of mediaUrls)URL.revokeObjectURL(url);mediaUrls.clear();
  }
+ function imageDownloadMenu(image,attachment,cardId,feedback){
+  let saving=false;
+  image.addEventListener('contextmenu',event=>{
+   event.preventDefault();event.stopPropagation();
+   root.querySelector('.trello-image-menu')?.remove();
+   const menu=node('div',null,'trello-image-menu');menu.setAttribute('popover','auto');menu.setAttribute('role','menu');
+   const save=button(saving?'正在下载原图…':'下载原图',async()=>{
+    if(saving)return;menu.hidePopover();saving=true;feedback('正在下载原图…');
+    try{const result=await request('download',cardId,{attachment:attachment.id,name:attachment.name});feedback(result.saved?'原图已保存':'已取消保存');}
+    catch(error){feedback('下载失败：'+error.message);}
+    finally{saving=false;}
+   });save.disabled=saving;save.setAttribute('role','menuitem');menu.append(save);
+   menu.addEventListener('click',event=>event.stopPropagation());
+   (image.closest('dialog')||root).append(menu);menu.showPopover();
+   menu.style.left=Math.max(8,Math.min(event.clientX,innerWidth-menu.offsetWidth-8))+'px';
+   menu.style.top=Math.max(8,Math.min(event.clientY,innerHeight-menu.offsetHeight-8))+'px';
+   menu.addEventListener('keydown',event=>event.stopPropagation());
+   menu.addEventListener('toggle',()=>{if(!menu.matches(':popover-open'))menu.remove();});save.focus();
+  });
+ }
  function closeImageViewer(){if(imageViewer){const current=imageViewer;imageViewer=null;current.observer.disconnect();current.dialog.close();current.dialog.remove();}}
  async function openImageViewer(attachment,cardId,epoch,thumbnail){
   closeImageViewer();if(epoch!==detailEpoch)return;
@@ -126,6 +146,7 @@
    if(action){event.preventDefault();event.stopImmediatePropagation();action();}
   },true);
   dialog.append(toolbar,status,viewport);root.append(dialog);const observer=new ResizeObserver(()=>{if(fit)layout();});const current={dialog,observer};imageViewer=current;dialog.addEventListener('cancel',event=>{event.preventDefault();closeImageViewer();});dialog.showModal();observer.observe(viewport);
+  imageDownloadMenu(image,attachment,cardId,text=>{status.textContent=text;});
   image.onload=layout;image.src=thumbnail;
   let drag=null;viewport.onpointerdown=event=>{if(event.button!==0)return;drag={x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop};viewport.setPointerCapture(event.pointerId);viewport.classList.add('dragging');event.preventDefault();};viewport.onpointermove=event=>{if(drag){viewport.scrollLeft=drag.left+drag.x-event.clientX;viewport.scrollTop=drag.top+drag.y-event.clientY;}};viewport.onpointerup=viewport.onpointercancel=()=>{drag=null;viewport.classList.remove('dragging');};
   const loadOriginal=async()=>{
@@ -163,7 +184,7 @@
      else if(mime==='application/pdf'){media=node('iframe');media.title=attachment.name||'PDF 附件';media.setAttribute('sandbox','');}
      else {URL.revokeObjectURL(url);mediaUrls.delete(url);failed('此附件暂不支持内嵌预览，请打开原附件。');return;}
      media.onerror=()=>{if(epoch===detailEpoch&&preview.isConnected){URL.revokeObjectURL(url);mediaUrls.delete(url);failed(mime.startsWith('image/')?'图片加载失败，请重试。':'此附件无法在当前浏览器预览，可重试或打开原附件。');}};
-     media.src=url;if(mime.startsWith('image/')){const thumb=button('',()=>openImageViewer(attachment,cardId,epoch,url),'trello-image-thumb');thumb.setAttribute('aria-label','放大图片：'+(attachment.name||'附件图片'));thumb.append(media);preview.replaceChildren(thumb);}else preview.replaceChildren(media);
+     media.src=url;if(mime.startsWith('image/')){imageDownloadMenu(media,attachment,cardId,text=>message(text,text.startsWith('下载失败')));const thumb=button('',()=>openImageViewer(attachment,cardId,epoch,url),'trello-image-thumb');thumb.setAttribute('aria-label','放大图片：'+(attachment.name||'附件图片'));thumb.append(media);preview.replaceChildren(thumb);}else preview.replaceChildren(media);
     }catch(error){if(epoch===detailEpoch&&preview.isConnected)failed(error.message);}
    };
    queue.push(load);

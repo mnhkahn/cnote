@@ -264,6 +264,7 @@ def main():
                 parser.error('sign requires an app path')
             sign_file(directory, args.path, identity, identifier='com.cyeam.cnote')
         print(f'Using fixed CNote identity: {identity}')
+        print('Fixed self-signing keeps signature requirements stable; it does not guarantee prompt-free login-Keychain access after upgrades.')
 
 
 if __name__ == '__main__':

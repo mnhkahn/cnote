@@ -65,7 +65,7 @@ jobs:
           # Seeded on the default branch by ci.yml. Tag-only caches cannot be
           # reused by the next release and take minutes to clean and upload.
           save-if: 'false'
-      - name: Verify cross-version Keychain access
+      - name: Verify signature consistency and isolated Keychain access
         run: python3 scripts/test-code-signing.py
       - name: Test native update restart guard
         run: sh scripts/test-updater.sh

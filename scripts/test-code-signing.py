@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Prove two different signed executables share one legacy-Keychain ACL."""
+"""Check signature consistency and access in an isolated test keychain.
+
+This does not cover the login keychain partition ACL and does not establish
+that a self-signed application can upgrade without another password prompt.
+"""
 import importlib.util
 import pathlib
 import secrets
@@ -39,7 +43,8 @@ with tempfile.TemporaryDirectory(prefix='cnote-keychain-upgrade-test-') as folde
         with executable.open('ab') as stream:
             stream.write(b'tampered')
         assert subprocess.run(['codesign', '--verify', str(executable)], capture_output=True).returncode != 0
-        print('Different builds keep the same certificate-bound requirement; modified signed code is rejected.')
+        print('Isolated fixture: certificate-bound requirements match; modified signed code is rejected.')
+        print('This fixture does not verify login-Keychain partition ACLs. Self-signed builds may still prompt after upgrades.')
     finally:
         if keychain.exists():
             signing.run(['security', 'delete-keychain', keychain])
