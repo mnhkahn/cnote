@@ -74,11 +74,12 @@
   const timeText=value=>{value=timestamp(value);if(value===Number.MAX_SAFE_INTEGER)return '—';const date=new Date(value);return `${dayKey(date)} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;};
   const table=node('table',null,'trello-table');table.setAttribute('aria-label','当天 Trello 任务');
   const columns=[
-   daily.some(card=>homeworkType(card))&&{label:'作业类型',value:homeworkType,cls:'trello-homework-type',width:12},
-   {label:'进度',value:listName,cls:'trello-progress',width:10},
-   daily.some(card=>grade(card))&&{label:'打分结果',value:grade,cls:'trello-grade',width:8},
-   {label:'实际完成时间',value:card=>timeText(card.dateCompleted),cls:'trello-completed-at',width:19},
-   {label:'预计完成时间',value:card=>timeText(card.due),cls:'trello-due-at',width:19}
+   daily.some(card=>homeworkType(card))&&{label:'作业类型',value:homeworkType,cls:'trello-homework-type',width:10},
+   {label:'进度',value:listName,cls:'trello-progress',width:8},
+   daily.some(card=>grade(card))&&{label:'打分结果',value:grade,cls:'trello-grade',width:7},
+   {label:'实际完成时间',value:card=>timeText(card.dateCompleted),cls:'trello-completed-at',width:17},
+   {label:'预计完成时间',value:card=>timeText(card.due),cls:'trello-due-at',width:17},
+   {label:'更新时间',value:card=>timeText(card.dateLastActivity),cls:'trello-updated-at',width:17}
   ].filter(Boolean);
   const head=node('thead'),heading=node('tr');for(const column of [{label:'标题',width:100-columns.reduce((sum,column)=>sum+column.width,0)},...columns]){const cell=node('th',column.label);cell.scope='col';cell.style.width=column.width+'%';heading.append(cell);}head.append(heading);table.append(head);
   const body=node('tbody');for(const card of daily.sort((a,b)=>rank(a)-rank(b)||listName(a).localeCompare(listName(b),'zh-CN')||completedAt(a)-completedAt(b)||timestamp(a.due)-timestamp(b.due))){
