@@ -15,6 +15,22 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' lo
   const textValue=()=>page.evaluate(()=>cnoteTools.state.text);
   const waitValue=value=>page.waitForFunction(value=>cnoteTools.state.text.replace(/\r\n/g,'\n')===value,value,{timeout:5000});
   const action=op=>page.locator(`[data-text-op="${op}"]`).click();
+  await t.test('opened text waits for draft restore, switches pages and preserves undo',async()=>{
+   await page.evaluate(()=>{
+    cnoteTools.receive({type:'tool_open_text',name:'中文 空格.md',text:'# 标题\n\nMarkdown 正文'});
+    cnoteTools.receive({type:'tool_state',state:{text:'原有草稿',left:'保留 Diff'}});
+   });
+   await waitValue('# 标题\n\nMarkdown 正文');
+   assert.equal(await page.evaluate(()=>cnoteTools.workspace),1);
+   assert.equal(await page.evaluate(()=>cnoteTools.state.left),'保留 Diff');
+   await page.locator('#text-undo').click();await waitValue('原有草稿');
+   await page.evaluate(()=>{cnoteTools.show(2);cnoteTools.receive({type:'tool_open_text',name:'sample.txt',text:'第二份文本'});});
+   await waitValue('第二份文本');assert.equal(await page.evaluate(()=>cnoteTools.workspace),1);
+   await page.evaluate(()=>cnoteTools.receive({type:'tool_open_text',name:'binary.bin',error:'文件包含二进制内容'}));
+   assert.equal(await textValue(),'第二份文本');assert((await page.locator('#tool-status').textContent()).includes('二进制'));
+   await page.evaluate(()=>cnoteTools.flush());
+   assert.equal(await page.evaluate(()=>messages.filter(m=>m.type==='tool_save').at(-1).state.text),'第二份文本');
+  });
   await t.test('jsonpack has one editor and compact controls that apply directly and undo',async()=>{
    await page.keyboard.press('Meta+2');await page.waitForSelector('#tool-text-editor .ace_text-input');
    assert.equal(await page.locator('#text-tool select').count(),0);

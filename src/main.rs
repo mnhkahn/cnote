@@ -7,6 +7,7 @@ mod icons;
 mod menus;
 mod note_title;
 mod store;
+mod text_file;
 mod theme;
 mod trello;
 mod ui;
@@ -37,11 +38,19 @@ fn run() -> anyhow::Result<()> {
     let engine = engine::start(directory.join("notes.db"));
     let application = gpui_platform::application();
     let (url_tx, url_rx) = async_channel::unbounded();
+    let launch_tx = url_tx.clone();
+    for arg in std::env::args_os().skip(1) {
+        if let Ok(path) = std::path::absolute(arg) {
+            if let Ok(url) = url::Url::from_file_path(path) {
+                let _ = launch_tx.try_send(url.to_string());
+            }
+        }
+    }
     // Register before launch so cold-start URLs wait for the window to exist.
     application.on_open_urls(move |urls| {
         for url in urls {
-            if let Some(page) = workspace::Workspace::from_url(&url) {
-                let _ = url_tx.try_send(page);
+            if workspace::Workspace::from_url(&url).is_some() || text_file::path(&url).is_some() {
+                let _ = url_tx.try_send(url);
             }
         }
     });
@@ -86,10 +95,24 @@ fn run() -> anyhow::Result<()> {
         };
         menus::install(cx, window);
         cx.spawn(async move |cx| {
-            while let Ok(page) = url_rx.recv().await {
+            while let Ok(url) = url_rx.recv().await {
+                let page = workspace::Workspace::from_url(&url);
+                let document = if let Some(path) = text_file::path(&url) {
+                    Some(cx.background_executor().spawn(async move {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                        match text_file::read(&path) {
+                            Ok(text) => serde_json::json!({"type":"tool_open_text","name":name,"text":text}),
+                            Err(error) => serde_json::json!({"type":"tool_open_text","name":name,"error":format!("{error:#}")}),
+                        }
+                    }).await)
+                } else { None };
                 if window
                     .update(cx, |notebook, window, cx| {
-                        notebook.switch_workspace(page, window, cx);
+                        if let Some(document) = document {
+                            notebook.open_text_file(document, window, cx);
+                        } else if let Some(page) = page {
+                            notebook.switch_workspace(page, window, cx);
+                        }
                         window.activate_window();
                         cx.activate(true);
                     })

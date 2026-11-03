@@ -35,6 +35,7 @@ pub struct Notebook {
     smoke_shortcuts: usize,
     ready: bool,
     pending: Vec<Event>,
+    pending_documents: Vec<Value>,
     close_allowed: bool,
     quitting: bool,
     close_tx: async_channel::Sender<()>,
@@ -196,6 +197,7 @@ impl Notebook {
             smoke_shortcuts: 0,
             ready: false,
             pending: Vec::new(),
+            pending_documents: Vec::new(),
             close_allowed: false,
             quitting: false,
             close_tx,
@@ -264,6 +266,14 @@ impl Notebook {
         }
         let _ = window;
         cx.notify();
+    }
+    pub fn open_text_file(&mut self, document: Value, window: &mut Window, cx: &mut Context<Self>) {
+        self.switch_workspace(Workspace::Text, window, cx);
+        if self.ready {
+            self.js(&format!("cnoteTools.receive({document})"));
+        } else {
+            self.pending_documents.push(document);
+        }
     }
     fn workspace_bar(
         &self,
@@ -496,10 +506,16 @@ impl Notebook {
             }
             "ready" => {
                 self.ready = true;
+                if !smoke() {
+                    crate::text_file::offer_defaults();
+                }
                 // A launch URL may select a tool before the web page is ready.
                 self.js(&format!("cnoteTools.show({})", self.workspace.index()));
                 for e in std::mem::take(&mut self.pending) {
                     self.deliver(e, cx);
+                }
+                for document in std::mem::take(&mut self.pending_documents) {
+                    self.js(&format!("cnoteTools.receive({document})"));
                 }
                 let _ = self.tx.send(Command::Web(v));
                 if smoke() {

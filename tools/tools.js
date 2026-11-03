@@ -4,6 +4,7 @@
  let state={text:'',left:'',right:'',tableInput:'',rows:[]},restored=false,restoreRequested=false,workspace=0,seq=0,saved=0,sent=0,saveTimer=null,retryTimer=null,barrierCallback=null;
  let textEditor,leftEditor,rightEditor,lastEditor,suppress=false,diffTimer=null,diffResult={rows:[],addedText:'',removedText:''},diffPage=0,tablePage=0,columnPage=0,selectedRow=1;
  let textVersion=0,textRequest=0,textCountTimer=null;
+ const pendingDocuments=[];
  let history=[],future=[],draftDue=0;const dirtyEditors=new Set();const jobs=new Map(),pending=new Set(),ROW_PAGE=100,COL_PAGE=24,MAX=20*1024*1024;
  function status(message,error=false){$('tool-status').textContent=message;$('tool-status').dataset.error=String(error);}
  function guard(){post({type:'tool_guard',dirty:seq>saved||pending.size>0});}
@@ -23,6 +24,9 @@
    const source=event.state||{};state={text:String(source.text||''),left:String(source.left||''),right:String(source.right||''),tableInput:String(source.tableInput||''),rows:Array.isArray(source.rows)?source.rows:[],trelloBoard:String(source.trelloBoard||'')};
    restored=true;$('table-input').value=state.tableInput;$('local-tools').inert=false;
    if(workspace)show(workspace);status('草稿已从本机恢复 · 离线可用');
+   for(const document of pendingDocuments.splice(0))openText(document);
+  }else if(event.type==='tool_open_text'){
+   if(restored)openText(event);else{pendingDocuments.push(event);show(1);}
   }else if(event.type==='tool_saved'){
    saved=Math.max(saved,Math.min(seq,event.seq));guard();if(saved<seq){sent=saved;flush();}else{status('已保存到本机');settleBarrier();}
   }else if(event.type==='tool_save_failed'){
@@ -64,6 +68,18 @@
   if(index===1){textEditor.resize();textEditor.focus();}
   if(index===2){leftEditor.resize();rightEditor.resize();leftEditor.focus();}
   if(index===3){renderTable();$('table-input').focus();}
+ }
+ function openText(document){
+  show(1);
+  if(document.error){status(`${document.name}：${document.error}`,true);return;}
+  captureEditors();
+  const doc=textEditor.session.getDocument(),last=doc.getLength()-1;
+  textEditor.session.markUndoGroup();
+  textEditor.session.replace(new (ace.require('ace/range').Range)(0,0,last,doc.getLine(last).length),document.text);
+  textEditor.session.markUndoGroup();
+  captureEditors();textEditor.navigateFileStart();textEditor.focus();
+  $('text-decode-layers').replaceChildren();textFeedback('');
+  status(`已打开 ${document.name} · 修改保存为本机草稿`);
  }
  function run(kind,task,data){
   let job=jobs.get(kind);

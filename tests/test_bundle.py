@@ -59,6 +59,11 @@ class BundleTests(unittest.TestCase):
                 'CFBundleURLSchemes': ['cnote'],
                 'CFBundleTypeRole': 'Viewer',
             }])
+            document = info['CFBundleDocumentTypes'][0]
+            self.assertIn('public.text', document['LSItemContentTypes'])
+            self.assertIn('md', document['CFBundleTypeExtensions'])
+            self.assertIn('txt', document['CFBundleTypeExtensions'])
+            self.assertEqual(document['LSHandlerRank'], 'Alternate')
             self.assertEqual(info['CFBundleShortVersionString'], '1.2.3')
             self.assertEqual(info['CFBundleVersion'], '1.2.3')
             self.assertTrue(info['SURequireSignedFeed'])
