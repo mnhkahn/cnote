@@ -64,7 +64,7 @@
   for(let i=0;i<7;i++){const date=new Date(first);date.setDate(date.getDate()+i);const key=dayKey(date),count=cards.filter(c=>!c.closed&&dueDay(c)===key).length;const el=button('',()=>{selected=date;render();},'trello-day');el.setAttribute('aria-label',key);el.setAttribute('aria-pressed',String(key===dayKey(selected)));el.classList.toggle('is-today',key===dayKey(new Date()));el.append(node('span',['周一','周二','周三','周四','周五','周六','周日'][i]),node('strong',String(date.getDate())),node('small',count?`${count} 张卡片`:'—'));week.append(el);}
   if(!board)return;
   const content=document.getElementById('trello-content');content.replaceChildren();if(busy){content.append(node('p','正在加载看板…','trello-empty'));return;}
-  const daily=cards.filter(c=>!c.closed&&dueDay(c)===dayKey(selected));const title=node('div',null,'trello-day-title');title.append(node('strong',`${selected.getMonth()+1}月${selected.getDate()}日`),node('span',`${daily.length} 张卡片`));content.append(title);
+  const daily=cards.filter(c=>!c.closed&&dueDay(c)===dayKey(selected));
   const listName=card=>lists.find(list=>list.id===card.idList)?.name||'未知进度';
   const rank=card=>{const name=listName(card).trim();if(name==='待完成')return 0;if(name==='待改错')return 1;if(name==='已完成')return 3;if(name==='已改错')return 4;return card.dueComplete?3:2;};
   const homeworkType=card=>String(card.desc||'').match(/^[ \t]*(?:作业)?类型[ \t]*[:：][ \t]*([^\r\n]*)/m)?.[1].trim()||'';
