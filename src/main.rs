@@ -40,10 +40,10 @@ fn run() -> anyhow::Result<()> {
     let (url_tx, url_rx) = async_channel::unbounded();
     let launch_tx = url_tx.clone();
     for arg in std::env::args_os().skip(1) {
-        if let Ok(path) = std::path::absolute(arg) {
-            if let Ok(url) = url::Url::from_file_path(path) {
-                let _ = launch_tx.try_send(url.to_string());
-            }
+        if let Ok(path) = std::path::absolute(arg)
+            && let Ok(url) = url::Url::from_file_path(path)
+        {
+            let _ = launch_tx.try_send(url.to_string());
         }
     }
     // Register before launch so cold-start URLs wait for the window to exist.

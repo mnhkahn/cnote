@@ -26,7 +26,9 @@ pub fn read(path: &std::path::Path) -> anyhow::Result<String> {
             bail!("UTF-16 文件编码不完整");
         }
         let units: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| {
                 if little {
                     u16::from_le_bytes([b[0], b[1]])
@@ -49,6 +51,17 @@ pub fn read(path: &std::path::Path) -> anyhow::Result<String> {
         bail!("文件包含二进制内容，无法作为文本打开");
     }
     Ok(text)
+}
+
+/// Offer file associations only after the packaged app's editor has started.
+pub fn offer_defaults() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        unsafe extern "C" {
+            fn cnote_default_apps_offer();
+        }
+        cnote_default_apps_offer();
+    }
 }
 
 #[cfg(test)]
@@ -80,16 +93,5 @@ mod tests {
             .set_len(8 * 1024 * 1024 + 1)
             .unwrap();
         assert!(read(&file).is_err());
-    }
-}
-
-/// Offer file associations only after the packaged app's editor has started.
-pub fn offer_defaults() {
-    #[cfg(target_os = "macos")]
-    unsafe {
-        unsafe extern "C" {
-            fn cnote_default_apps_offer();
-        }
-        cnote_default_apps_offer();
     }
 }
