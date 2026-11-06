@@ -28,6 +28,8 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
     assert(await page.evaluate(()=>messages.some(m=>m.type==='conflict_view'&&m.id==='conflict-note')));
     await receive({type:'dialog',kind:'conflict_view',data:{id:'conflict-note',title:'冲突笔记',local,cloud,revision:7,etag:'remote-tag'}});
     await page.waitForFunction(()=>document.querySelectorAll('.conflict-change').length===2);
+    assert(await page.locator('.conflict-line-numbers').count()>0);
+    await page.getByRole('button',{name:'查看内容差异',exact:true}).click();
     assert(await page.getByRole('button',{name:'保存合并结果',exact:true}).isDisabled());
     assert((await page.locator('.conflict-preview').textContent()).includes('还有 2 处差异待选择'));
     await page.locator('.conflict-change').first().getByRole('button',{name:'选择云端'}).click();
@@ -54,6 +56,33 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
     assert.equal(await page.getByLabel('已保存的笔记内容').innerHTML(),resolution.html);
     await page.getByRole('button',{name:'完成',exact:true}).click();
     await receive({type:'load',id:'a',title:'Note',html:'<p>Hello</p>'});
+   });
+   await t.test('conflict arrows send either side into the center result in both views',async()=>{
+    const local='<div>easejob支持age</div>',cloud='<div>EDrive 文件系统，看看还缺什么东西。</div>';
+    await receive({type:'dialog',kind:'conflict_view',data:{id:'card-conflict',title:'OpenClaw',local,cloud,revision:8,etag:'card-tag'}});
+    await page.waitForSelector('.conflict-change');
+    await page.getByRole('button',{name:'查看内容差异',exact:true}).click();
+    assert.equal(await page.locator('.conflict-arrow.mine').textContent(),'→');
+    assert.equal(await page.locator('.conflict-arrow.cloud').textContent(),'←');
+    await page.locator('.conflict-arrow.mine').click();
+    assert.equal(await page.locator('.conflict-arrow.mine').getAttribute('aria-pressed'),'true');
+    assert.equal(await page.locator('.conflict-preview').innerHTML(),local);
+    await page.getByRole('button',{name:'查看 HTML 差异',exact:true}).click();
+    assert.equal(await page.locator('.conflict-version.result .conflict-content').textContent(),'<div>easejob支持age</div>');
+    await page.locator('.conflict-arrow.cloud').click();
+    assert.equal(await page.locator('.conflict-arrow.cloud').getAttribute('aria-pressed'),'true');
+    assert.equal(await page.locator('.conflict-preview').innerHTML(),cloud);
+    assert.equal(await page.locator('.conflict-version.result .conflict-content').textContent(),cloud);
+    await page.locator('.conflict-arrow.mine').click();
+    assert.equal(await page.locator('.conflict-preview').innerHTML(),local);
+    await page.locator('.conflict-arrow.cloud').focus();
+    await page.keyboard.press('Space');
+    assert.equal(await page.locator('.conflict-preview').innerHTML(),cloud);
+    await page.getByRole('button',{name:'保存合并结果',exact:true}).click();
+    const result=await page.evaluate(()=>messages.filter(m=>m.type==='resolve').at(-1));
+    assert.equal(result.choice,'merge');assert.equal(result.html,cloud);
+    await receive({type:'dialog',kind:'conflict_result',data:{id:'card-conflict',ok:true,choice:'merge',html:cloud,pending_sync:true}});
+    await page.getByRole('button',{name:'完成',exact:true}).click();
    });
    await t.test('theme overrides system appearance and can resume following it',async()=>{
     await page.emulateMedia({colorScheme:'light'});

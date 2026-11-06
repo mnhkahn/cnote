@@ -210,30 +210,69 @@
  function showConflict(d){
   if(dialog.open){dialogQueue.push(()=>showConflict(d));return;}
   const local=notes.get(d.id),left=local?.loaded?(pending(local)?local.node.innerHTML:local.source??local.node.innerHTML):d.local;
-  const intro=text('p',`“${d.title}”有两个版本。每处差异都由你选择本地或云端内容，再检查合并预览。红色为本地差异，绿色为云端差异。`);
+  const intro=text('p','点击差异旁的 → 或 ← 采用对应内容');intro.className='conflict-hint';
   const summary=text('p','正在计算差异…'),changes=document.createElement('div'),preview=document.createElement('div');
   changes.className='conflict-changes';preview.className='note-editor conflict-preview';preview.setAttribute('aria-label','合并结果预览');
   preview.addEventListener('click',e=>e.preventDefault());changes.addEventListener('click',e=>{if(e.target.closest('a,input'))e.preventDefault();});
-  const label=text('h3','合并预览'),sourceToggle=text('button','查看 HTML 差异');sourceToggle.type='button';
-  let source=false,groups=[],ready=false,completed=false,save;
+  const label=document.createElement('details'),sourceToggle=text('button','查看内容差异'),toolbar=document.createElement('div');sourceToggle.type='button';
+  label.className='conflict-preview-toggle';label.append(text('summary','笔记预览'),preview);toolbar.className='conflict-toolbar';toolbar.append(summary,sourceToggle);
+  let source=true,groups=[],ready=false,completed=false,save;
   const render=()=>{
    const fragment=document.createDocumentFragment();let count=0;
+   const headings=document.createElement('div');headings.className='conflict-columns conflict-headings';
+   headings.append(text('strong','本地'),text('span',''),text('strong','合并结果'),text('span',''),text('strong','云端'));fragment.append(headings);
+   const lineNumbers={mine:1,result:1,cloud:1};
+   const content=html=>{
+    const node=document.createElement(source?'pre':'div');node.className='conflict-content';
+    if(source){
+     const code=(html||'').replace(/(<\/(?:div|p|h[1-6]|li|tr|table|ul|ol|blockquote|pre)>)(?=<)/gi,'$1\n');
+     for(const token of code.match(/<[^>]*>|[^<]+|</g)||[]){const part=text('span',token);if(token.startsWith('<'))part.className='conflict-tag';node.append(part);}
+    }else if(html)node.innerHTML=sanitize(html);else node.textContent='（此处无内容）';
+    return node;
+   };
+   const fill=(pane,html,side)=>{
+    const node=content(html);
+    if(source){
+     const lines=node.textContent.split('\n');node.replaceChildren();
+     for(const [index,line] of lines.entries()){
+      const row=document.createElement('span'),number=document.createElement('span'),code=document.createElement('span');row.className='conflict-code-row';number.className='conflict-line-numbers';number.setAttribute('aria-hidden','true');number.dataset.line=html?String(lineNumbers[side]++):'';code.className='conflict-code-text';
+      for(const token of line.match(/<[^>]*>|[^<]+|</g)||[]){const part=text('span',token);if(token.startsWith('<'))part.className='conflict-tag';code.append(part);}
+      if(index<lines.length-1)code.append(document.createTextNode('\n'));row.append(number,code);node.append(row);
+     }
+     pane.append(node);
+    }else{
+     const number=document.createElement('span');number.className='conflict-line-numbers';number.setAttribute('aria-hidden','true');number.dataset.line=html?String(lineNumbers[side]++):'';pane.append(number,node);
+    }
+   };
    for(const group of groups){
-    if(group.same!==undefined)continue;
-    const section=document.createElement('section');section.className='conflict-change';
-    section.append(text('h3',`差异 ${++count} · ${group.choice==='mine'?'保留本地':group.choice==='cloud'?'使用云端':'待你选择'}`));
-    const columns=document.createElement('div');columns.className='conflict-columns';
-    for(const [choice,heading,html] of [['mine','本地',group.mine],['cloud','云端',group.cloud]]){
-     const column=document.createElement('div');column.className='conflict-version '+choice;
-     const button=text('button',group.choice===choice?`✓ 已选${heading}`:`选择${heading}`);button.type='button';button.setAttribute('aria-pressed',String(group.choice===choice));
-     button.onclick=()=>{group.choice=choice;render();};
-     const content=document.createElement(source?'pre':'div');content.className='conflict-content';
-     if(source)content.textContent=html||'（此处无内容）';else if(html)content.innerHTML=sanitize(html);else content.textContent='（此处无内容）';
-     column.append(button,content);columns.append(column);
+    const section=document.createElement('section'),columns=document.createElement('div');columns.className='conflict-columns';
+    if(group.same!==undefined){
+     section.className='conflict-context';
+     for(const name of ['mine','result','cloud']){const pane=document.createElement('div');pane.className='conflict-version '+name;fill(pane,group.same,name);columns.append(pane);if(name!=='cloud')columns.append(text('span',''));}
+    }else{
+     section.className='conflict-change';
+     section.setAttribute('aria-label',`差异 ${++count} · ${group.choice==='mine'?'保留本地':group.choice==='cloud'?'使用云端':'待你选择'}`);
+     const changeIndex=count-1;
+     const pane=choice=>{const node=document.createElement('div');node.className='conflict-version '+choice;node.classList.toggle('selected',group.choice===choice);fill(node,group[choice],choice);return node;};
+     const arrow=choice=>{
+      const heading=choice==='mine'?'本地':'云端',button=text('button',choice==='mine'?'→':'←');button.type='button';button.className='conflict-arrow '+choice;
+      button.setAttribute('aria-label',`选择${heading}`);button.setAttribute('aria-pressed',String(group.choice===choice));button.title=`差异 ${count} · ${group.choice===choice?'已选：':''}采用${heading}内容`;
+      button.onclick=()=>{
+       if(pendingConflictResult)return;
+       const focused=document.activeElement===button;group.choice=choice;render();
+       if(focused)changes.querySelectorAll('.conflict-change')[changeIndex]?.querySelector(`.conflict-arrow.${choice}`)?.focus({preventScroll:true});
+      };const gutter=document.createElement('span');gutter.className='conflict-gutter';gutter.append(button);return gutter;
+     };
+     const result=document.createElement('div');result.className='conflict-version result';result.setAttribute('aria-label',`差异 ${count} 的合并结果`);
+     if(group.choice){result.classList.add('resolved');result.title=group.choice==='mine'?'已采用本地':'已采用云端';fill(result,group[group.choice],'result');}
+     else {result.classList.add('unresolved');result.append(text('span',`差异 ${count} · 待选择`));}
+     columns.append(pane('mine'),arrow('mine'),result,arrow('cloud'),pane('cloud'));
     }
     section.append(columns);fragment.append(section);
    }
-   changes.replaceChildren(fragment);
+   const tail=document.createElement('div');tail.className='conflict-columns conflict-tail';
+   for(let column=0;column<5;column++)tail.append(document.createElement(column%2?'span':'div'));fragment.append(tail);
+   const scrollTop=changes.scrollTop,scrollLeft=changes.scrollLeft;changes.replaceChildren(fragment);changes.scrollTop=scrollTop;changes.scrollLeft=scrollLeft;
    const differences=groups.filter(g=>g.same===undefined),unselected=differences.filter(g=>!g.choice).length;
    const mine=differences.filter(g=>g.choice==='mine').length,cloud=differences.filter(g=>g.choice==='cloud').length;
    preview.innerHTML=unselected?'':sanitize(groups.map(g=>g.same??g[g.choice]).join(''));
@@ -260,7 +299,7 @@
    barrier(()=>post({type:'resolve',id:d.id,choice,html,revision:d.revision,etag:d.etag}));
    return false;
   };
-  modal('conflict','对比并处理笔记冲突',[intro,summary,sourceToggle,changes,label,preview],[['稍后处理',()=>{}],['使用云端版本',()=>resolve('cloud')],['保留本地版本',()=>resolve('mine')],['保存合并结果',()=>{if(!ready||groups.some(g=>g.same===undefined&&!g.choice))return false;return resolve('merge',groups.map(g=>g.same??g[g.choice]).join(''));},'primary']]);
+  modal('conflict',`合并冲突 · ${d.title}`,[toolbar,intro,changes,label],[['稍后处理',()=>{}],['使用云端版本',()=>resolve('cloud')],['保留本地版本',()=>resolve('mine')],['保存合并结果',()=>{if(!ready||groups.some(g=>g.same===undefined&&!g.choice))return false;return resolve('merge',groups.map(g=>g.same??g[g.choice]).join(''));},'primary']]);
   save=actions.lastElementChild;save.disabled=true;
   window.cnoteTools.compareNote({left:left??'',right:d.cloud}).then(parts=>{
    for(const part of parts){
