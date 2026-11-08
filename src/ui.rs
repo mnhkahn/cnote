@@ -477,6 +477,7 @@ impl Notebook {
             }
             "trello" if v["op"] == "copy_image" => self.copy_trello_image(v, cx),
             "trello" if v["op"] == "download" => self.download_trello_image(v, cx),
+            "trello" if v["op"] == "share_image" => self.share_trello_image(v, cx),
             "trello" => {
                 if smoke() && std::env::var_os("CNOTE_IMAGE_SAVE_TEST").is_some() {
                     self.js(&format!("window.cnoteTrelloNativeFixture({v})"));
@@ -582,23 +583,21 @@ impl Notebook {
             }
         }
     }
-    fn trello_image_bytes(v: Value) -> anyhow::Result<Vec<u8>> {
+    fn trello_original_image(mut v: Value) -> anyhow::Result<(Vec<u8>, String)> {
         use base64::Engine;
-        // Reuse original bytes already loaded by the viewer; never save a thumbnail.
+        // Reuse original bytes already loaded by the viewer.
         let data = if v["image"].is_object() {
-            v["image"].clone()
+            v["image"].take()
         } else {
             crate::trello::request(json!({
                 "op":"attachment", "id":v["id"],
                 "attachment":v["attachment"], "original":true
             }))?
         };
-        anyhow::ensure!(
-            data["mime"]
-                .as_str()
-                .is_some_and(|mime| mime.starts_with("image/")),
-            "附件不是图片"
-        );
+        let mime = data["mime"]
+            .as_str()
+            .filter(|mime| mime.starts_with("image/"))
+            .ok_or_else(|| anyhow::anyhow!("附件不是图片"))?;
         let encoded = data["base64"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("图片数据缺失"))?;
@@ -609,7 +608,62 @@ impl Notebook {
             !bytes.is_empty() && bytes.len() <= LIMIT,
             "图片为空或超过 25 MB"
         );
-        Ok(bytes)
+        Ok((bytes, mime.to_owned()))
+    }
+
+    fn share_trello_image(&self, v: Value, cx: &mut Context<Self>) {
+        let request = v["request"].as_u64().unwrap_or(0);
+        cx.spawn(async move |this, cx| {
+            let result = async {
+                let (directory, path) = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let name = v["name"]
+                            .as_str()
+                            .unwrap_or("")
+                            .trim()
+                            .replace(['/', '\\', ':', '\0'], "_");
+                        let (bytes, mime) = Self::trello_original_image(v)?;
+                        let extension = mime
+                            .strip_prefix("image/")
+                            .filter(|value| {
+                                !value.is_empty()
+                                    && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                            })
+                            .unwrap_or("img");
+                        let name = match name.as_str() {
+                            "" | "." | ".." => format!("图片.{extension}"),
+                            _ if std::path::Path::new(&name)
+                                .extension()
+                                .is_none_or(|ext| ext.is_empty()) =>
+                            {
+                                format!("{}.{extension}", name.trim_end_matches('.'))
+                            }
+                            _ => name,
+                        };
+                        let directory =
+                            tempfile::Builder::new().prefix("cnote-share-").tempdir()?;
+                        let path = directory.path().join(name);
+                        std::fs::write(&path, bytes)
+                            .map_err(|_| anyhow::anyhow!("无法准备分享文件"))?;
+                        Ok::<_, anyhow::Error>((directory, path))
+                    })
+                    .await?;
+                let picker = this.update(cx, |_, _| workspace::share_image(&path))??;
+                let shared = picker.recv().await?;
+                drop(directory);
+                shared
+            }
+            .await;
+            let event = match result {
+                Ok(shared) => json!({"request":request,"data":{"shared":shared}}),
+                Err(error) => json!({"request":request,"error":error.to_string()}),
+            };
+            let _ = this.update(cx, |this, _| {
+                this.js(&format!("window.cnoteTrello?.receive({event})"));
+            });
+        })
+        .detach();
     }
 
     fn copy_trello_image(&self, v: Value, cx: &mut Context<Self>) {
@@ -617,10 +671,10 @@ impl Notebook {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { Self::trello_image_bytes(v) })
+                .spawn(async move { Self::trello_original_image(v) })
                 .await;
             let _ = this.update(cx, |this, _| {
-                let result = result.and_then(|bytes| workspace::copy_image(&bytes, ""));
+                let result = result.and_then(|(bytes, _)| workspace::copy_image(&bytes, ""));
                 let event = match result {
                     Ok(()) => json!({"request":request,"data":{"copied":true}}),
                     Err(error) => json!({"request":request,"error":error.to_string()}),
@@ -649,7 +703,7 @@ impl Notebook {
                             json!({"request":request,"progress":"正在下载原图…"})));
                     });
                     cx.background_executor().spawn(async move {
-                        let bytes = Self::trello_image_bytes(v)?;
+                        let (bytes, _) = Self::trello_original_image(v)?;
                         std::fs::write(path, bytes)
                             .map_err(|_| anyhow::anyhow!("图片保存失败，请检查目标目录权限和可用空间"))?;
                         Ok(json!({"saved":true}))

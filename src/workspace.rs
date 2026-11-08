@@ -205,6 +205,11 @@ pub fn prompt_image_save(
     receiver
 }
 unsafe extern "C" {
+    fn cnote_image_share(
+        path: *const std::ffi::c_char,
+        context: *mut std::ffi::c_void,
+        callback: extern "C" fn(*mut std::ffi::c_void, std::ffi::c_int),
+    ) -> std::ffi::c_int;
     fn cnote_image_save_prompt(
         directory: *const std::ffi::c_char,
         name: *const std::ffi::c_char,
@@ -222,6 +227,35 @@ unsafe extern "C" {
     fn cnote_workspace_test_more_menu();
     fn cnote_workspace_test_navigation(index: u32, shift: std::ffi::c_int);
 }
+type ImageShareResult = anyhow::Result<bool>;
+
+extern "C" fn image_share_finished(context: *mut std::ffi::c_void, status: std::ffi::c_int) {
+    let sender =
+        unsafe { Box::from_raw(context.cast::<async_channel::Sender<ImageShareResult>>()) };
+    let result = match status {
+        1 => Ok(true),
+        0 => Ok(false),
+        _ => Err(anyhow::anyhow!("系统分享未能完成，请重试")),
+    };
+    let _ = sender.try_send(result);
+}
+
+/// Must be called on the Cocoa main thread. Keep the file available until the result arrives.
+pub fn share_image(
+    path: &std::path::Path,
+) -> anyhow::Result<async_channel::Receiver<ImageShareResult>> {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?;
+    let (sender, receiver) = async_channel::bounded(1);
+    let context = Box::into_raw(Box::new(sender));
+    let accepted =
+        unsafe { cnote_image_share(path.as_ptr(), context.cast(), image_share_finished) };
+    if accepted == 0 {
+        unsafe { drop(Box::from_raw(context)) };
+        anyhow::bail!("无法打开系统分享面板，请重试");
+    }
+    Ok(receiver)
+}
+
 pub fn copy_image(bytes: &[u8], html: &str) -> anyhow::Result<()> {
     let html = std::ffi::CString::new(html)?;
     anyhow::ensure!(

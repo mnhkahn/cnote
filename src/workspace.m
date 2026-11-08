@@ -52,6 +52,74 @@ int cnote_image_save_prompt(const char *directory, const char *name, void *conte
     return 1;
 }
 
+// Keep the file alive until the picker is dismissed or the selected service
+// has finished reading it, including while AirDrop waits for a recipient.
+@interface CNoteImageShare : NSObject <NSSharingServicePickerDelegate, NSSharingServiceDelegate>
+@property(nonatomic, strong) NSSharingServicePicker *picker;
+@property(nonatomic, weak) NSView *anchor;
+@property(nonatomic) NSRect anchorRect;
+@property(nonatomic, copy) void (^completion)(int);
+- (void)finish:(int)status;
+@end
+
+static CNoteImageShare *imageShare;
+
+@implementation CNoteImageShare
+- (void)finish:(int)status {
+    void (^completion)(int) = self.completion;
+    self.completion = nil;
+    if (!completion) return;
+    // Leave AppKit's delegate stack before releasing the picker and file.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        imageShare = nil;
+        completion(status);
+    });
+}
+- (void)sharingServicePicker:(NSSharingServicePicker *)picker didChooseSharingService:(NSSharingService *)service {
+    if (!service) [self finish:0];
+}
+- (id<NSSharingServiceDelegate>)sharingServicePicker:(NSSharingServicePicker *)picker delegateForSharingService:(NSSharingService *)service {
+    return self;
+}
+- (NSView *)anchoringViewForSharingService:(NSSharingService *)service showRelativeToRect:(NSRect *)rect preferredEdge:(NSRectEdge *)edge {
+    *rect = self.anchorRect;
+    *edge = NSMinYEdge;
+    return self.anchor;
+}
+- (void)sharingService:(NSSharingService *)service didShareItems:(NSArray *)items {
+    [self finish:1];
+}
+- (void)sharingService:(NSSharingService *)service didFailToShareItems:(NSArray *)items error:(NSError *)error {
+    [self finish:[error.domain isEqualToString:NSCocoaErrorDomain] && error.code == NSUserCancelledError ? 0 : -1];
+}
+@end
+
+int cnote_image_share(const char *path, void *context, void (*callback)(void *, int)) {
+    if (!NSThread.isMainThread || imageShare) return 0;
+    NSWindow *window = NSApp.mainWindow;
+    NSView *view = window.contentView;
+    NSString *filename = [NSString stringWithUTF8String:path];
+    if (!view || !window.visible || !filename) return 0;
+
+    CNoteImageShare *share = [CNoteImageShare new];
+    share.anchor = view;
+    NSRect bounds = view.bounds;
+    NSPoint point = [view convertPoint:window.mouseLocationOutsideOfEventStream fromView:nil];
+    if (!NSPointInRect(point, bounds)) point = NSMakePoint(NSMidX(bounds), NSMaxY(bounds) - 36);
+    share.anchorRect = NSMakeRect(point.x, point.y, 1, 1);
+    share.completion = ^(int status) { callback(context, status); };
+    imageShare = share;
+
+    NSURL *file = [NSURL fileURLWithPath:filename isDirectory:NO];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!window.visible || window.attachedSheet) { [share finish:-1]; return; }
+        share.picker = [[NSSharingServicePicker alloc] initWithItems:@[file]];
+        share.picker.delegate = share;
+        [share.picker showRelativeToRect:share.anchorRect ofView:view preferredEdge:NSMinYEdge];
+    });
+    return 1;
+}
+
 // Update the existing item without asking Security.framework to return its
 // old secret. keyring's set_password performs a second password read first.
 int32_t cnote_keychain_write(const char *service, const char *account,

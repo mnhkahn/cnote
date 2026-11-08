@@ -4,6 +4,7 @@
  let selected=new Date(),boards=[],lists=[],cards=[],board='',loaded=false,busy=false,serial=0,boardEpoch=0,detailEpoch=0,connected=false,apiKey='';
  const pending=new Map(),mediaUrls=new Set(),originalImages=new Map(),originalData=new Map();
  let imageViewer=null,autoTimer=null,active=false,lastRefreshAt=0;
+ let sharingImage=false;
  const AUTO_REFRESH_MS=60000;
  const dayKey=date=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
  const dueDay=card=>card.due&&Number.isFinite(new Date(card.due).getTime())?dayKey(new Date(card.due)):'';
@@ -132,7 +133,17 @@
   detail?.querySelectorAll('audio,video').forEach(media=>media.pause());
   detail?.remove();for(const url of mediaUrls)URL.revokeObjectURL(url);mediaUrls.clear();
  }
- function imageDownloadMenu(image,attachment,cardId,feedback){
+ async function shareImage(attachment,cardId,feedback){
+  if(sharingImage)return;
+  sharingImage=true;
+  feedback('正在准备分享原图…');
+  try{
+   const result=await request('share_image',cardId,{attachment:attachment.id,name:attachment.name,image:originalData.get(attachment.id)});
+   feedback(result.shared?'图片已分享':'已取消分享');
+  }catch(error){feedback('分享失败：'+error.message);}
+  finally{sharingImage=false;}
+ }
+ function imageMenu(image,attachment,cardId,feedback){
   let saving=false;
   image.addEventListener('contextmenu',event=>{
    event.preventDefault();event.stopPropagation();
@@ -152,8 +163,10 @@
     try{await request('copy_image',cardId,{attachment:attachment.id,image:originalData.get(attachment.id)});feedback('图片已复制');}
     catch(error){feedback('复制失败：'+error.message);}
    });copy.setAttribute('role','menuitem');
+   const share=button('分享图片',()=>{closeMenu();shareImage(attachment,cardId,feedback);});
+   share.disabled=sharingImage;share.setAttribute('role','menuitem');
    const open=button('在页面中打开',()=>{closeMenu();openLink(attachment.url);});open.setAttribute('role','menuitem');
-   menu.append(copy,open,save);
+   menu.append(copy,share,open,save);
    menu.addEventListener('click',event=>event.stopPropagation());
    (image.closest('dialog')||root).append(menu);menu.showPopover();
    menu.style.left=Math.max(8,Math.min(event.clientX,innerWidth-menu.offsetWidth-8))+'px';
@@ -173,9 +186,10 @@
   const zoom=node('span','100%','trello-image-zoom');
   const changeScale=factor=>{fit=false;scale=Math.min(8,Math.max(.01,scale*factor));layout();};
   const actions={zoomOut:()=>changeScale(1/1.25),zoomIn:()=>changeScale(1.25),fit:()=>{fit=true;layout();},actual:()=>{fit=false;scale=1;layout();},left:()=>{rotation=(rotation+270)%360;layout();},right:()=>{rotation=(rotation+90)%360;layout();}};
-  const iconButton=(label,icon,shortcut,action)=>{const control=button('',action,'trello-image-icon');control.setAttribute('aria-label',label);control.setAttribute('aria-keyshortcuts',shortcut==='+'?'Plus':shortcut);control.title=`${label}（${shortcut}）`;const glyph=node('i',null,'bi bi-'+icon);glyph.setAttribute('aria-hidden','true');control.append(glyph);return control;};
+  const iconButton=(label,icon,shortcut,action)=>{const control=button('',action,'trello-image-icon');control.setAttribute('aria-label',label);if(shortcut)control.setAttribute('aria-keyshortcuts',shortcut==='+'?'Plus':shortcut);control.title=shortcut?`${label}（${shortcut}）`:label;const glyph=node('i',null,'bi bi-'+icon);glyph.setAttribute('aria-hidden','true');control.append(glyph);return control;};
   toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','图片查看工具');
-  toolbar.append(title,iconButton('缩小','zoom-out','-',actions.zoomOut),zoom,iconButton('放大','zoom-in','+',actions.zoomIn),iconButton('适应窗口','fullscreen-exit','0',actions.fit),iconButton('原始大小','arrows-fullscreen','1',actions.actual),iconButton('逆时针旋转','arrow-counterclockwise','Shift+R',actions.left),iconButton('顺时针旋转','arrow-clockwise','R',actions.right),iconButton('关闭图片','x-lg','Escape',closeImageViewer));
+  const feedback=text=>{status.textContent=text;};
+  toolbar.append(title,iconButton('缩小','zoom-out','-',actions.zoomOut),zoom,iconButton('放大','zoom-in','+',actions.zoomIn),iconButton('适应窗口','fullscreen-exit','0',actions.fit),iconButton('原始大小','arrows-fullscreen','1',actions.actual),iconButton('逆时针旋转','arrow-counterclockwise','Shift+R',actions.left),iconButton('顺时针旋转','arrow-clockwise','R',actions.right),iconButton('分享图片','share',null,()=>shareImage(attachment,cardId,feedback)),iconButton('关闭图片','x-lg','Escape',closeImageViewer));
   dialog.addEventListener('keydown',event=>{
    if(event.target.closest('.trello-image-menu'))return;
    if(event.isComposing||event.altKey)return;
@@ -191,7 +205,7 @@
    if(action){event.preventDefault();event.stopImmediatePropagation();action();}
   },true);
   dialog.append(toolbar,status,viewport);root.append(dialog);const observer=new ResizeObserver(()=>{if(fit)layout();});const current={dialog,observer};imageViewer=current;dialog.addEventListener('cancel',event=>{event.preventDefault();closeImageViewer();});dialog.showModal();observer.observe(viewport);
-  imageDownloadMenu(image,attachment,cardId,text=>{status.textContent=text;});
+  imageMenu(image,attachment,cardId,feedback);
   image.onload=layout;image.src=thumbnail;
   let drag=null;viewport.onpointerdown=event=>{if(event.button!==0)return;drag={x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop};viewport.setPointerCapture(event.pointerId);viewport.classList.add('dragging');event.preventDefault();};viewport.onpointermove=event=>{if(drag){viewport.scrollLeft=drag.left+drag.x-event.clientX;viewport.scrollTop=drag.top+drag.y-event.clientY;}};viewport.onpointerup=viewport.onpointercancel=()=>{drag=null;viewport.classList.remove('dragging');};
   const loadOriginal=async()=>{
@@ -229,7 +243,7 @@
      else if(mime==='application/pdf'){media=node('iframe');media.title=attachment.name||'PDF 附件';media.setAttribute('sandbox','');}
      else {URL.revokeObjectURL(url);mediaUrls.delete(url);failed('此附件暂不支持内嵌预览，请打开原附件。');return;}
      media.onerror=()=>{if(epoch===detailEpoch&&preview.isConnected){URL.revokeObjectURL(url);mediaUrls.delete(url);failed(mime.startsWith('image/')?'图片加载失败，请重试。':'此附件无法在当前浏览器预览，可重试或打开原附件。');}};
-     media.src=url;if(mime.startsWith('image/')){imageDownloadMenu(media,attachment,cardId,text=>message(text,text.startsWith('下载失败')));const thumb=button('',()=>openImageViewer(attachment,cardId,epoch,url),'trello-image-thumb');thumb.setAttribute('aria-label','放大图片：'+(attachment.name||'附件图片'));thumb.append(media);preview.replaceChildren(thumb);}else preview.replaceChildren(media);
+     media.src=url;if(mime.startsWith('image/')){imageMenu(media,attachment,cardId,text=>message(text,text.includes('失败：')));const thumb=button('',()=>openImageViewer(attachment,cardId,epoch,url),'trello-image-thumb');thumb.setAttribute('aria-label','放大图片：'+(attachment.name||'附件图片'));thumb.append(media);preview.replaceChildren(thumb);}else preview.replaceChildren(media);
     }catch(error){if(epoch===detailEpoch&&preview.isConnected)failed(error.message);}
    };
    queue.push(load);

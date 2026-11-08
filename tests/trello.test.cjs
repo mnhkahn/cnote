@@ -9,6 +9,7 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  const fixture=`<script>
  window.messages=[];window.failImageOnce=true;window.revoked=[];window.nativeRevoke=window.nativeRevoke||URL.revokeObjectURL.bind(URL);URL.revokeObjectURL=url=>{revoked.push(url);nativeRevoke(url);};window.failBoards=false;window.boardFailureCode='auth_required';window.ipc={postMessage(raw){const m=JSON.parse(raw);messages.push(m);if(m.type==='workspace')cnoteTools.show(m.index);if(m.type==='refresh_workspace'){if(cnoteTools.workspace===4)cnoteTrello.refresh();else cnote.action('refresh');}if(m.type==='tool_ready')setTimeout(()=>cnoteTools.receive({type:'tool_state',state:{}}),0);if(m.type==='tool_save')setTimeout(()=>cnoteTools.receive({type:'tool_saved',seq:m.seq}),0);if(m.type==='trello')setTimeout(()=>{
  if(m.op==='copy_image'){cnoteTrello.receive({request:m.request,data:{copied:true}});return;}
+ if(m.op==='share_image'){cnoteTrello.receive({request:m.request,data:{shared:!!m.image}});return;}
  if(m.op==='download'){window.pendingDownload=m.request;return;}
  if(m.op==='attachment'){
  if(m.attachment==='image'&&failImageOnce){failImageOnce=false;cnoteTrello.receive({request:m.request,error:'模拟附件加载失败'});return;}
@@ -50,7 +51,13 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  await page.evaluate(()=>{window.messages=messages.filter(m=>m.type!=='link');});
  await page.locator('.trello-activity').screenshot({path:'/tmp/cnote-trello-activity-'+name+'.png'});await page.locator('.trello-activity summary').click();assert.equal(await page.locator('.trello-action').isVisible(),false);assert((await page.locator('.trello-detail-body').textContent()).includes('成员甲'));assert((await page.locator('.trello-detail-body').textContent()).includes('☑ 第一步'));assert.equal(await page.locator('#trello-detail script').count(),0);assert.deepEqual(await page.locator('.trello-attachment-preview figcaption strong').allTextContents(),['音频作业','文字附件','附件图片']);await page.waitForSelector('.trello-attachment-content audio');assert(await page.locator('.trello-attachment-content audio').evaluate(el=>el.controls));await page.waitForFunction(()=>document.querySelector('.trello-attachment-content pre')?.textContent.includes('附件正文'));assert.equal(await page.locator('.trello-attachment-content pre img').count(),0);await page.getByRole('button',{name:'重试加载',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.trello-attachment-content img')?.naturalWidth>0);assert.equal(await page.locator('.trello-attachment-content img').count(),1);await page.locator('.trello-attachment-preview').last().screenshot({path:'/tmp/cnote-trello-attachment-'+name+'.png'});assert(await page.locator('.trello-image-thumb img').evaluate(img=>img.getBoundingClientRect().height<=150&&img.getBoundingClientRect().width<=220));assert.equal(await page.locator('.trello-image-tile figcaption button').count(),0);await page.getByRole('button',{name:'放大图片：附件图片',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#trello-image-viewer [role=status]')?.textContent.startsWith('原图 ·'));assert(await page.evaluate(()=>messages.some(m=>m.type==='trello'&&m.op==='attachment'&&m.original===true)));const viewerImage=page.locator('.trello-image-stage img');
  await viewerImage.click({button:'right'});
- assert.deepEqual(await page.locator('.trello-image-menu [role=menuitem]').allTextContents(),['复制图片','在页面中打开','下载原图']);
+ assert.deepEqual(await page.locator('.trello-image-menu [role=menuitem]').allTextContents(),['复制图片','分享图片','在页面中打开','下载原图']);
+ await page.getByRole('menuitem',{name:'分享图片',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#trello-image-viewer [role=status]').textContent==='图片已分享');
+ await page.getByRole('button',{name:'分享图片',exact:true}).click();
+ await page.waitForFunction(()=>messages.filter(m=>m.op==='share_image').length===2);
+ assert.deepEqual(await page.evaluate(()=>messages.filter(m=>m.op==='share_image').map(({id,attachment,name,image})=>({id,attachment,name,image}))),Array(2).fill({id:'card',attachment:'image',name:'附件图片',image:{mime:'image/png',base64:png}}));
+ await viewerImage.click({button:'right'});
  await page.getByRole('menuitem',{name:'复制图片',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('#trello-image-viewer [role=status]').textContent==='图片已复制');
  await viewerImage.click({button:'right'});await page.getByRole('menuitem',{name:'在页面中打开',exact:true}).click();
