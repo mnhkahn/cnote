@@ -43,7 +43,32 @@
   if(!panel.querySelector('.trello-table'))panel.replaceChildren(node('p','连接暂时不可用，已保存的关联信息会保留。','trello-empty'),button('重试连接',()=>retry()));
  }
  function restore(){request('status').then(data=>{connected=data.connected;apiKey=data.key||'';if(connected)loadBoards();else guide();}).catch(error=>failure(error,restore));}
- function openLink(url){try{const parsed=new URL(url);if(parsed.protocol==='https:'||parsed.protocol==='http:')window.ipc.postMessage(JSON.stringify({type:'link',url:parsed.href}));}catch{}}
+ function webURL(url){
+  try{
+   const parsed=new URL(url);
+   if(parsed.protocol==='https:'||parsed.protocol==='http:')return parsed.href;
+  }catch{}
+ }
+ function openLink(url){const href=webURL(url);if(href)window.ipc.postMessage(JSON.stringify({type:'link',url:href}));}
+ function linkedText(tag,text,cls){
+  const el=node(tag,null,cls);
+  const links=/\[([^\]\r\n]+)\]\((https?:\/\/(?:[^\s<>()]|\([^\s<>()]*\))+)\)|<(https?:\/\/[^\s<>]+)>|\b(https?:\/\/(?:[^\s<>()\[\]"'`，。！？；：（）【】《》、]|\([^\s<>()]*\)|\[[0-9a-f:.]+\])+)/gi;
+  let end=0;
+  for(const match of text.matchAll(links)){
+   const [,label,markdown,autolink,bare]=match;
+   const url=markdown||autolink||bare.replace(/[.,!?;:]+$/,'');
+   const href=webURL(url);
+   if(!href)continue;
+   el.append(text.slice(end,match.index));
+   const link=node('a',label||url);
+   link.href=href;
+   link.onclick=event=>{event.preventDefault();openLink(link.href);};
+   el.append(link);
+   end=match.index+match[0].length-(bare?bare.length-url.length:0);
+  }
+  el.append(text.slice(end));
+  return el;
+ }
  function shell(){root.innerHTML='<div class="trello-header"><div><div class="trello-eyebrow">TRELLO / WEEKLY PLANNER</div><h1>每一天，都有进展</h1></div><div class="trello-controls"><select id="trello-board" aria-label="选择 Trello 看板"></select><button id="trello-refresh" type="button" title="刷新 Trello（⌘R）" aria-keyshortcuts="Meta+R">刷新</button><button id="trello-settings" type="button">关联设置</button></div></div><div class="trello-nav"><div><button id="trello-prev" aria-label="上一周">‹</button><button id="trello-today">今天</button><button id="trello-next" aria-label="下一周">›</button></div><strong id="trello-range"></strong><span title="查看卡片详情时暂缓刷新">按截止日期 · 每分钟自动刷新</span></div><div id="trello-week" aria-label="周历"></div><div id="trello-message" role="status"></div><div id="trello-content"></div>';
   document.getElementById('trello-settings').onclick=()=>{boardEpoch++;busy=false;guide('',true);};
   document.getElementById('trello-prev').onclick=()=>shift(-7);document.getElementById('trello-next').onclick=()=>shift(7);document.getElementById('trello-today').onclick=()=>{selected=new Date();render();};document.getElementById('trello-refresh').onclick=refresh;document.getElementById('trello-board').onchange=e=>{lists=[];cards=[];board=e.target.value;window.cnoteTools.setTrelloBoard(board);loadBoard();};
@@ -219,16 +244,16 @@
   dialog.addEventListener('pointercancel',()=>{backdropPressed=false;});
   dialog.addEventListener('click',event=>{const dismiss=backdropPressed&&outside(event);backdropPressed=false;if(dismiss)close();});
   dialog.showModal();
-  try{const data=await request('card',card.id);if(epoch!==detailEpoch)return;const full=data.card;body.replaceChildren();body.append(node('p',`${lists.find(l=>l.id===full.idList)?.name||'未知进度'} · ${full.dueComplete?'已标记完成':'未标记完成'}`),node('p',full.due?`截止：${new Date(full.due).toLocaleString()}`:'无截止日期'),node('h3','描述'),node('div',full.desc||'暂无描述','trello-description'));
+  try{const data=await request('card',card.id);if(epoch!==detailEpoch)return;const full=data.card;body.replaceChildren();body.append(node('p',`${lists.find(l=>l.id===full.idList)?.name||'未知进度'} · ${full.dueComplete?'已标记完成':'未标记完成'}`),node('p',full.due?`截止：${new Date(full.due).toLocaleString()}`:'无截止日期'),node('h3','描述'),linkedText('div',full.desc||'暂无描述','trello-description'));
    if(full.labels?.length)body.append(node('p','标签：'+full.labels.map(l=>l.name||l.color).join('、')));
    if(full.members?.length)body.append(node('p','成员：'+full.members.map(m=>m.fullName||m.username).join('、')));
-   for(const checklist of full.checklists||[]){body.append(node('h3',checklist.name));for(const item of checklist.checkItems||[])body.append(node('p',(item.state==='complete'?'☑ ':'☐ ')+item.name));}
+   for(const checklist of full.checklists||[]){body.append(node('h3',checklist.name));for(const item of checklist.checkItems||[])body.append(linkedText('p',(item.state==='complete'?'☑ ':'☐ ')+item.name));}
    body.append(node('h3','附件'));renderAttachments(body,data.attachments||[],card.id,epoch);if(!data.attachments?.length)body.append(node('p',data.partial?'附件可能未能加载':'暂无附件'));
    const activity=node('details',null,'trello-activity');activity.append(node('summary',`评论与活动（${(data.actions||[]).length}）`));const records=node('ul',null,'trello-activity-list');
    for(const action of data.actions||[]){
     const entry=node('li',null,'trello-action');let text=action.data?.text;
     if(!text){const data=action.data||{};text=data.listBefore&&data.listAfter?`${data.listBefore.name} → ${data.listAfter.name}`:data.attachment?`${action.type==='deleteAttachment'?'删除':'上传'}附件：${data.attachment.name||''}`:data.old&&Object.hasOwn(data.old,'dueComplete')?(data.card?.dueComplete?'标记完成':'取消完成'):data.old&&Object.hasOwn(data.old,'desc')?'更新描述':data.old&&Object.hasOwn(data.old,'name')?'修改标题':({createCard:'创建卡片',copyCard:'复制卡片',updateCard:'更新卡片'})[action.type]||action.type;}
-    const time=node('time',new Date(action.date).toLocaleString()),author=node('span',action.memberCreator?.fullName||'','trello-action-author'),content=node('span',String(text||'').replace(/\s+/g,' ').trim(),'trello-action-text');time.dateTime=action.date;content.title=String(text||'');author.title=author.textContent;entry.append(time,author,content);records.append(entry);
+    const time=node('time',new Date(action.date).toLocaleString()),author=node('span',action.memberCreator?.fullName||'','trello-action-author'),content=linkedText('span',String(text||'').trim(),'trello-action-text');time.dateTime=action.date;content.title=String(text||'');author.title=author.textContent;entry.append(time,author,content);records.append(entry);
    }
    activity.append(records);if(!data.actions?.length)activity.append(node('p',data.partial?'活动可能未能加载':'暂无活动'));if(data.actions?.length>=1000)activity.append(node('p','仅显示最近 1000 条活动。'));body.append(activity);
    if(data.partial)body.append(node('p','部分信息加载失败，请关闭后重试，或打开 Trello 查看。'));body.append(button('在 Trello 查看完整卡片',()=>openLink(full.url),'primary'));
