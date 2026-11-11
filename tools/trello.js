@@ -4,7 +4,7 @@
  let selected=new Date(),boards=[],lists=[],cards=[],board='',loaded=false,busy=false,serial=0,boardEpoch=0,detailEpoch=0,connected=false,apiKey='';
  const pending=new Map(),mediaUrls=new Set(),originalImages=new Map(),originalData=new Map();
  let imageViewer=null,autoTimer=null,active=false,lastRefreshAt=0;
- let sharingImage=false;
+ let sharingImage=false,editingCell=null;
  const AUTO_REFRESH_MS=60000;
  const dayKey=date=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
  const dueDay=card=>card.due&&Number.isFinite(new Date(card.due).getTime())?dayKey(new Date(card.due)):'';
@@ -26,9 +26,9 @@
   const token=node('input');token.id='trello-token';token.type='password';token.autocomplete='off';token.placeholder='粘贴授权页面显示的 Token';token.required=true;
   const keyLabel=node('label','API Key');keyLabel.htmlFor=key.id;const tokenLabel=node('label','Token');tokenLabel.htmlFor=token.id;
   const feedback=node('p');feedback.id='trello-auth-feedback';feedback.setAttribute('role','status');
-  const auth=button('打开 Trello 授权页面',async()=>{auth.disabled=true;feedback.textContent='正在打开授权页面…';try{const result=await request('authorize',undefined,{key:key.value.trim()});openLink(result.url);feedback.textContent='在浏览器中允许只读访问，再将页面显示的 Token 粘贴到下方。';}catch(error){feedback.textContent=error.message;}finally{auth.disabled=false;}});
+  const auth=button('打开 Trello 授权页面',async()=>{auth.disabled=true;feedback.textContent='正在打开授权页面…';try{const result=await request('authorize',undefined,{key:key.value.trim()});openLink(result.url);feedback.textContent='在浏览器中允许读写访问，再将页面显示的 Token 粘贴到下方。';}catch(error){feedback.textContent=error.message;}finally{auth.disabled=false;}});
   const submit=button('关联并保存');submit.type='submit';submit.className='primary';
-  form.append(node('p','1. 填写 Trello API Key，再打开浏览器授权。'),keyLabel,key,auth,button('获取 API Key',()=>openLink('https://trello.com/apps/admin')),node('p','2. 授权后，将浏览器显示的 Token 粘贴到这里。'),tokenLabel,token,node('p','只需关联一次：使用长期只读授权，凭据保存在系统钥匙串，重启后自动连接。'),submit,feedback);
+  form.append(node('p','1. 填写 Trello API Key，再打开浏览器授权。'),keyLabel,key,auth,button('获取 API Key',()=>openLink('https://trello.com/apps/admin')),node('p','2. 授权后，将浏览器显示的 Token 粘贴到这里。'),tokenLabel,token,node('p','只需关联一次：使用长期读写授权，凭据保存在系统钥匙串，重启后自动连接。'),submit,feedback);
   form.onsubmit=async event=>{event.preventDefault();submit.disabled=true;auth.disabled=true;feedback.textContent='正在验证并关联…';try{await request('connect',undefined,{key:key.value.trim(),token:token.value.trim()});apiKey=key.value.trim();token.value='';connected=true;board='';lists=[];cards=[];detailEpoch++;removeDetail();document.getElementById('trello-board').replaceChildren(new Option('选择看板…',''));window.cnoteTools.setTrelloBoard('');render();await loadBoards();}catch(error){feedback.textContent=error.message;}finally{submit.disabled=false;auth.disabled=false;}};
   box.append(form);
   if(connected)addDisconnect(box);
@@ -74,11 +74,11 @@
   document.getElementById('trello-settings').onclick=()=>{boardEpoch++;busy=false;guide('',true);};
   document.getElementById('trello-prev').onclick=()=>shift(-7);document.getElementById('trello-next').onclick=()=>shift(7);document.getElementById('trello-today').onclick=()=>{selected=new Date();render();};document.getElementById('trello-refresh').onclick=refresh;document.getElementById('trello-board').onchange=e=>{lists=[];cards=[];board=e.target.value;window.cnoteTools.setTrelloBoard(board);loadBoard();};
  }
- function refresh(){if(!loaded||busy)return;if(connected){if(board)loadBoard();else loadBoards();}else restore();}
+ function refresh(){if(!loaded||busy||editingCell)return;if(connected){if(board)loadBoard();else loadBoards();}else restore();}
  function stopAutoRefresh(){clearTimeout(autoTimer);autoTimer=null;}
  function scheduleAutoRefresh(delay=AUTO_REFRESH_MS){
   stopAutoRefresh();if(!active||document.hidden||!connected||!board)return;
-  autoTimer=setTimeout(()=>{autoTimer=null;if(!busy&&!root.querySelector('dialog[open]')&&document.getElementById('trello-content')?.querySelector('.trello-table'))loadBoard(true);else scheduleAutoRefresh();},delay);
+  autoTimer=setTimeout(()=>{autoTimer=null;if(!busy&&!editingCell&&!root.querySelector('dialog[open]')&&document.getElementById('trello-content')?.querySelector('.trello-table'))loadBoard(true);else scheduleAutoRefresh();},delay);
  }
  function resumeAutoRefresh(){scheduleAutoRefresh(Math.max(0,AUTO_REFRESH_MS-(Date.now()-lastRefreshAt)));}
  document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else if(active&&loaded)resumeAutoRefresh();});
@@ -102,7 +102,7 @@
   const columns=[
    daily.some(card=>homeworkType(card))&&{label:'作业类型',value:homeworkType,cls:'trello-homework-type',width:10},
    {label:'进度',value:listName,cls:'trello-progress',width:8},
-   daily.some(card=>grade(card))&&{label:'打分结果',value:grade,cls:'trello-grade',width:7},
+   {label:'打分结果',value:grade,cls:'trello-grade',width:7},
    {label:'实际完成时间',value:card=>timeText(card.dateCompleted),cls:'trello-completed-at',width:17},
    {label:'预计完成时间',value:card=>timeText(card.due),cls:'trello-due-at',width:17},
    {label:'更新时间',value:card=>timeText(card.dateLastActivity),cls:'trello-updated-at',width:17}
@@ -111,12 +111,41 @@
   const body=node('tbody');for(const card of daily.sort((a,b)=>rank(a)-rank(b)||listName(a).localeCompare(listName(b),'zh-CN')||completedAt(a)-completedAt(b)||timestamp(a.due)-timestamp(b.due))){
    const row=node('tr',null,'trello-task');row.dataset.completed=String(rank(card)>=3);
    const titleCell=node('td');titleCell.append(button(card.name,()=>showDetail(card),'trello-open-card'));
-   row.append(titleCell);for(const column of columns)row.append(node('td',column.value(card)||'—',column.cls));
-   row.onclick=event=>{if(!event.target.closest('button'))showDetail(card);};body.append(row);
+   row.append(titleCell);for(const column of columns){
+    const cell=node('td',column.value(card)||'—',column.cls);row.append(cell);
+    if(column.cls==='trello-progress'||column.cls==='trello-grade'){
+     cell.classList.add('trello-editable');cell.tabIndex=0;cell.title='双击修改';
+     const edit=()=>editCell(cell,card,column.cls==='trello-progress'?'progress':'grade',column.value(card));
+     cell.onclick=event=>event.stopPropagation();cell.ondblclick=event=>{event.stopPropagation();edit();};
+     cell.onkeydown=event=>{if(event.target===cell&&(event.key==='Enter'||event.key==='F2')){event.preventDefault();edit();}};
+    }
+   }
+   row.onclick=event=>{if(!event.target.closest('button,select,.trello-editable'))showDetail(card);};body.append(row);
   }
   if(!daily.length){const row=node('tr'),cell=node('td','当天没有到期卡片','trello-empty');cell.colSpan=columns.length+1;row.append(cell);body.append(row);}
   table.append(body);content.append(table);if(!daily.length)message('当天没有到期卡片，可选择其他日期。');else message('');
 
+ }
+ function editCell(cell,card,field,display){
+  if(editingCell||busy)return;
+  const select=node('select');select.setAttribute('aria-label',field==='progress'?'修改进度':'修改打分结果');
+  const current=field==='progress'?card.idList:display;
+  const options=field==='progress'?lists.filter(list=>!list.closed).map(list=>[list.id,list.name]):[['','未评分'],...['100','优','良','中','差'].map(value=>[value,value])];
+  if(current&&!options.some(([value])=>value===current))options.unshift([current,display]);
+  for(const [value,label] of options)select.add(new Option(label,value));select.value=current;
+  const edit={select,saving:false},epoch=boardEpoch;editingCell=edit;stopAutoRefresh();cell.replaceChildren(select);
+  const finish=()=>{if(editingCell===edit){editingCell=null;scheduleAutoRefresh();}if(cell.isConnected)cell.textContent=display||'—';};
+  select.onblur=()=>{if(!edit.saving)finish();};
+  select.onkeydown=event=>{event.stopPropagation();if(event.key==='Escape'){event.preventDefault();finish();cell.focus();}};
+  select.onchange=async()=>{
+   if(select.value===current){finish();return;}
+   edit.saving=true;select.disabled=true;
+   try{
+    const data=await request('update_cell',card.id,{field,value:select.value});
+    finish();if(epoch===boardEpoch){Object.assign(card,data.card);render();message('已保存');}
+   }catch(error){finish();if(epoch===boardEpoch)message(error.message,true);}
+  };
+  select.focus();
  }
  async function loadBoards(){const epoch=++boardEpoch;busy=true;message('正在检测 Trello…');try{const data=await request('boards');if(epoch!==boardEpoch)return;boards=(data.boards||[]).filter(b=>!b.closed);const select=document.getElementById('trello-board');select.replaceChildren(new Option('选择看板…',''));boards.forEach(b=>select.add(new Option(b.name,b.id)));if(!boards.some(b=>b.id===board)){board='';window.cnoteTools.setTrelloBoard('');}select.value=board;message('');if(board){await loadBoard();return;}busy=false;guide(boards.length?'请选择右上方的 Trello 看板。':'当前账号没有可用看板，请先在 Trello 创建看板。');}catch(error){if(epoch!==boardEpoch)return;busy=false;failure(error,loadBoards);}}
  async function loadBoard(silent=false){
@@ -237,7 +266,10 @@
     download.title='Download audio';download.setAttribute('aria-label','Download audio');
     const icon=node('i',null,'bi bi-download');icon.setAttribute('aria-hidden','true');download.append(icon);actions.append(download);
    };
-   figure.classList.toggle('trello-image-tile',knownImage);caption.append(info);if(!knownImage){actions.append(button('打开原附件',()=>openLink(attachment.url)));caption.append(actions);}
+   figure.classList.toggle('trello-image-tile',knownImage);caption.append(info);if(!knownImage){
+    const open=button('',()=>openLink(attachment.url),'trello-open-attachment');open.title='打开原附件';open.setAttribute('aria-label','打开原附件');
+    const icon=node('i',null,'bi bi-box-arrow-up-right');icon.setAttribute('aria-hidden','true');open.append(icon);actions.append(open);caption.append(actions);
+   }
    if(attachment.mimeType?.startsWith('audio/')||/\.(mp3|m4a|wav|ogg|opus|aac)$/i.test(attachment.name||''))addAudioDownload();
    const preview=node('div',attachment.isUpload===false?(knownImage?'外部图片附件暂不支持本地读取。':'外部链接附件，可打开原附件查看。'):'正在加载附件…','trello-attachment-content');figure.append(caption,preview);gallery.append(figure);
    if(attachment.isUpload===false)continue;

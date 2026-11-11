@@ -16,4 +16,6 @@
 .trello-detail-body a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
 .trello-action-text:has(a){white-space:normal;overflow-wrap:anywhere}
 
-.trello-attachment-preview figcaption>div:first-child{min-width:0}.trello-attachment-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}#trello-tool .trello-audio-download{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;font-size:16px}#trello-tool .trello-audio-download:disabled{opacity:.5;cursor:wait}
+.trello-attachment-preview figcaption>div:first-child{min-width:0}.trello-attachment-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}#trello-tool .trello-audio-download,#trello-tool .trello-open-attachment{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;font-size:16px}#trello-tool .trello-audio-download:disabled{opacity:.5;cursor:wait}
+
+.trello-editable{cursor:cell}.trello-editable:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.trello-editable select{box-sizing:border-box;width:100%;min-width:0;padding:4px 2px;background:var(--bg);color:var(--ink);border:1px solid var(--accent);border-radius:4px;font:inherit}

@@ -1,4 +1,4 @@
-//! Native, read-only Trello API client. User credentials live only in Keychain.
+//! Native Trello API client. User credentials live only in Keychain.
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use reqwest::{StatusCode, blocking::Client};
@@ -85,7 +85,7 @@ fn authorize(key: &str) -> Result<String> {
     url.query_pairs_mut().extend_pairs([
         ("key", key),
         ("name", "CNote"),
-        ("scope", "read"),
+        ("scope", "read,write"),
         ("expiration", "never"),
         ("response_type", "token"),
     ]);
@@ -110,21 +110,48 @@ impl Api {
         self.get_url(&format!("{API}{path}"), query)
     }
     fn get_url(&self, url: &str, query: &[(&str, &str)]) -> Result<Value> {
+        self.send_url(reqwest::Method::GET, url, query, None)
+    }
+    fn put(&self, path: &str, body: &Value) -> Result<Value> {
+        self.send_url(
+            reqwest::Method::PUT,
+            &format!("{API}{path}"),
+            &[],
+            Some(body),
+        )
+    }
+    fn send_url(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        query: &[(&str, &str)],
+        body: Option<&Value>,
+    ) -> Result<Value> {
+        let writing = method == reqwest::Method::PUT;
         // Credentials stay out of request URLs, logs and errors.
         let authorization = format!(
             "OAuth oauth_consumer_key=\"{}\", oauth_token=\"{}\"",
             self.auth.key, self.auth.token
         );
         let mut url = url::Url::parse(url).context("无效的 Trello 接口地址")?;
-        url.query_pairs_mut().extend_pairs(query.iter().copied());
-        let response = self
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query.iter().copied());
+        }
+        let mut request = self
             .client
-            .get(url)
-            .header(reqwest::header::AUTHORIZATION, authorization)
+            .request(method, url)
+            .header(reqwest::header::AUTHORIZATION, authorization);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request
             .send()
             .map_err(|_| anyhow::anyhow!("无法连接 Trello，请检查网络后重试"))?;
         match response.status() {
             StatusCode::UNAUTHORIZED => return Err(AuthRequired.into()),
+            StatusCode::FORBIDDEN if writing => bail!(
+                "没有权限修改此 Trello 卡片；旧的只读授权请在关联设置中重新授权读写权限，并确认你有看板编辑权限"
+            ),
             StatusCode::FORBIDDEN => bail!("没有权限读取此 Trello 内容，请检查授权或选择其他看板"),
             StatusCode::TOO_MANY_REQUESTS => bail!("Trello 请求过于频繁，请稍后重试"),
             status if !status.is_success() => {
@@ -324,6 +351,43 @@ impl Api {
     }
 }
 
+fn description_with_grade(description: &str, grade: &str) -> Result<String> {
+    anyhow::ensure!(
+        ["", "100", "优", "良", "中", "差"].contains(&grade),
+        "请选择有效评分"
+    );
+    let newline = if description.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut output = String::new();
+    let mut replaced = false;
+    for line in description.split_inclusive('\n') {
+        let is_grade = line
+            .split_once([':', '：'])
+            .is_some_and(|(key, _)| key.trim() == "打分结果");
+        if !replaced && is_grade {
+            replaced = true;
+            if !grade.is_empty() {
+                output.push_str(&format!("打分结果：{grade}"));
+                if line.ends_with('\n') {
+                    output.push_str(newline);
+                }
+            }
+        } else {
+            output.push_str(line);
+        }
+    }
+    if !replaced && !grade.is_empty() {
+        output = format!(
+            "打分结果：{grade}{}{description}",
+            if description.is_empty() { "" } else { newline }
+        );
+    }
+    Ok(output)
+}
+
 fn identifier(v: &Value) -> Result<&str> {
     let id = v["id"].as_str().unwrap_or_default();
     anyhow::ensure!(
@@ -361,7 +425,7 @@ pub fn request(v: Value) -> Result<Value> {
             session.auth = None;
             return Ok(json!({"connected":false}));
         }
-        "boards" | "board" | "card" | "attachment" => {}
+        "boards" | "board" | "card" | "attachment" | "update_cell" => {}
         _ => bail!("未知的 Trello 操作"),
     }
     let api = Api::new(session.auth()?.ok_or(AuthRequired)?)?;
@@ -375,6 +439,39 @@ pub fn request(v: Value) -> Result<Value> {
             Ok(
                 json!({"lists":api.get(&format!("/boards/{id}/lists"), &[("filter","open"),("fields","name,closed,pos")])?,"cards":api.get(&format!("/boards/{id}/cards"), &[("filter","open"),("fields","name,desc,due,dueComplete,idList,closed,url,labels,dateLastActivity,dateCompleted")])?}),
             )
+        }
+        "update_cell" => {
+            let id = identifier(&v)?;
+            let card = api.get(
+                &format!("/cards/{id}"),
+                &[("fields", "desc,idBoard,idList")],
+            )?;
+            let body = match v["field"].as_str().unwrap_or_default() {
+                "progress" => {
+                    let list_id = identifier(&json!({"id":v["value"]}))?.to_owned();
+                    let list = api.get(
+                        &format!("/lists/{list_id}"),
+                        &[("fields", "name,idBoard,closed")],
+                    )?;
+                    anyhow::ensure!(
+                        list["closed"] == false && list["idBoard"] == card["idBoard"],
+                        "请选择当前看板中的有效列表"
+                    );
+                    let mut body = json!({"idList":list_id});
+                    match list["name"].as_str().unwrap_or_default().trim() {
+                        "已完成" | "已改错" => body["dueComplete"] = json!(true),
+                        "待完成" | "待改错" => body["dueComplete"] = json!(false),
+                        _ => {}
+                    }
+                    body
+                }
+                "grade" => {
+                    let grade = v["value"].as_str().context("请选择有效评分")?;
+                    json!({"desc": description_with_grade(card["desc"].as_str().unwrap_or_default(), grade)?})
+                }
+                _ => bail!("此字段不支持修改"),
+            };
+            Ok(json!({"card":api.put(&format!("/cards/{id}"), &body)?}))
         }
         "attachment" => {
             let card = identifier(&v)?;
@@ -622,14 +719,107 @@ mod tests {
         );
     }
     #[test]
-    fn authorization_is_read_only_and_does_not_include_a_token() {
+    fn authorization_allows_card_updates_and_does_not_include_a_token() {
         let url = url::Url::parse(&authorize(&"a".repeat(32)).unwrap()).unwrap();
         let query: std::collections::HashMap<_, _> = url.query_pairs().collect();
-        assert_eq!(query.get("scope").unwrap(), "read");
+        assert_eq!(query.get("scope").unwrap(), "read,write");
         assert_eq!(query.get("name").unwrap(), "CNote");
         assert_eq!(query.get("expiration").unwrap(), "never");
         assert!(!query.contains_key("token"));
         assert!(authorize("bad\"key").is_err());
+    }
+    #[test]
+    fn grade_updates_preserve_other_description_content() {
+        assert_eq!(
+            description_with_grade("作业类型：数学\n要求：检查", "优").unwrap(),
+            "打分结果：优\n作业类型：数学\n要求：检查"
+        );
+        assert_eq!(
+            description_with_grade("说明\r\n 打分结果 : 暂评·良\r\n要求：保留\r\n", "100").unwrap(),
+            "说明\r\n打分结果：100\r\n要求：保留\r\n"
+        );
+        assert_eq!(
+            description_with_grade("打分结果：良\n原题", "").unwrap(),
+            "原题"
+        );
+        assert_eq!(
+            description_with_grade("打分结果：差", "中").unwrap(),
+            "打分结果：中"
+        );
+        assert_eq!(description_with_grade("", "优").unwrap(), "打分结果：优");
+        assert_eq!(description_with_grade("原题", "").unwrap(), "原题");
+        assert!(description_with_grade("原题", "优\n覆盖").is_err());
+    }
+    #[test]
+    fn update_request_sends_json_and_handles_read_only_tokens() {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+        };
+        for status in [200, 403] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut lines = Vec::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    lines.push(line);
+                }
+                assert!(lines[0].starts_with("PUT /test HTTP/1.1"));
+                assert!(!lines[0].contains("secret"));
+                assert!(lines.iter().any(|line| {
+                    line.to_lowercase().starts_with("authorization: oauth ")
+                        && line.contains("secret-token")
+                }));
+                let length: usize = lines
+                    .iter()
+                    .find_map(|line| {
+                        line.to_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|n| n.trim().parse().unwrap())
+                    })
+                    .unwrap();
+                let mut bytes = vec![0; length];
+                reader.read_exact(&mut bytes).unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&bytes).unwrap(),
+                    json!({"desc":"打分结果：优"})
+                );
+                let body = if status == 200 {
+                    r#"{"id":"card","desc":"打分结果：优"}"#
+                } else {
+                    "secret-token"
+                };
+                write!(stream,"HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+            });
+            let api = Api {
+                client: Client::builder().no_proxy().build().unwrap(),
+                auth: Credentials {
+                    key: "test-key".into(),
+                    token: "secret-token".into(),
+                },
+            };
+            let result = api.send_url(
+                reqwest::Method::PUT,
+                &format!("http://{addr}/test"),
+                &[],
+                Some(&json!({"desc":"打分结果：优"})),
+            );
+            if status == 200 {
+                assert_eq!(result.unwrap()["desc"], "打分结果：优");
+            } else {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains("重新授权读写权限"));
+                assert!(!error.contains("secret"));
+            }
+            server.join().unwrap();
+        }
     }
     #[test]
     fn request_uses_authorization_header_and_sanitizes_errors() {
