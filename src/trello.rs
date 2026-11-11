@@ -425,7 +425,8 @@ pub fn request(v: Value) -> Result<Value> {
             session.auth = None;
             return Ok(json!({"connected":false}));
         }
-        "boards" | "board" | "card" | "attachment" | "update_cell" => {}
+        "boards" | "board" | "card" | "attachment" | "recognize_image" | "transcribe_audio"
+        | "update_cell" => {}
         _ => bail!("未知的 Trello 操作"),
     }
     let api = Api::new(session.auth()?.ok_or(AuthRequired)?)?;
@@ -473,14 +474,34 @@ pub fn request(v: Value) -> Result<Value> {
             };
             Ok(json!({"card":api.put(&format!("/cards/{id}"), &body)?}))
         }
-        "attachment" => {
+        "attachment" | "recognize_image" | "transcribe_audio" => {
             let card = identifier(&v)?;
             let id = v["attachment"].as_str().unwrap_or("");
             anyhow::ensure!(
                 id.len() == 24 && id.bytes().all(|b| b.is_ascii_hexdigit()),
                 "无效的附件 ID"
             );
-            api.attachment(card, id, v["original"].as_bool().unwrap_or(false))
+            let transcribe = v["op"] == "transcribe_audio";
+            let recognize = v["op"] == "recognize_image";
+            let data = api.attachment(
+                card,
+                id,
+                transcribe || recognize || v["original"].as_bool().unwrap_or(false),
+            )?;
+            if recognize {
+                let mime = data["mime"].as_str().context("图片格式缺失")?;
+                anyhow::ensure!(mime.starts_with("image/"), "此附件不是图片");
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data["base64"].as_str().context("图片数据缺失")?)?;
+                crate::ocr::recognize(bytes)
+            } else if transcribe {
+                let mime = data["mime"].as_str().context("音频格式缺失")?;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data["base64"].as_str().context("音频数据缺失")?)?;
+                crate::asr::transcribe(bytes, mime)
+            } else {
+                Ok(data)
+            }
         }
         "card" => {
             let id = identifier(&v)?;

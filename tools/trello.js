@@ -128,24 +128,37 @@
  }
  function editCell(cell,card,field,display){
   if(editingCell||busy)return;
-  const select=node('select');select.setAttribute('aria-label',field==='progress'?'修改进度':'修改打分结果');
+  const menu=node('div',null,'trello-cell-options');menu.setAttribute('role','listbox');menu.setAttribute('aria-label',field==='progress'?'修改进度':'修改打分结果');
   const current=field==='progress'?card.idList:display;
   const options=field==='progress'?lists.filter(list=>!list.closed).map(list=>[list.id,list.name]):[['','未评分'],...['100','优','良','中','差'].map(value=>[value,value])];
   if(current&&!options.some(([value])=>value===current))options.unshift([current,display]);
-  for(const [value,label] of options)select.add(new Option(label,value));select.value=current;
-  const edit={select,saving:false},epoch=boardEpoch;editingCell=edit;stopAutoRefresh();cell.replaceChildren(select);
-  const finish=()=>{if(editingCell===edit){editingCell=null;scheduleAutoRefresh();}if(cell.isConnected)cell.textContent=display||'—';};
-  select.onblur=()=>{if(!edit.saving)finish();};
-  select.onkeydown=event=>{event.stopPropagation();if(event.key==='Escape'){event.preventDefault();finish();cell.focus();}};
-  select.onchange=async()=>{
-   if(select.value===current){finish();return;}
-   edit.saving=true;select.disabled=true;
+  const edit={saving:false},epoch=boardEpoch;editingCell=edit;stopAutoRefresh();cell.replaceChildren(node('span',display||'—'),menu);
+  const outside=event=>{if(!edit.saving&&!menu.contains(event.target))finish();};
+  const finish=()=>{if(editingCell!==edit)return;document.removeEventListener('pointerdown',outside,true);editingCell=null;scheduleAutoRefresh();if(cell.isConnected)cell.textContent=display||'—';};
+  document.addEventListener('pointerdown',outside,true);
+  const save=async(value)=>{
+   if(edit.saving||editingCell!==edit)return;
+   if(value===current){finish();cell.focus();return;}
+   edit.saving=true;menu.setAttribute('aria-busy','true');menu.querySelectorAll('button').forEach(option=>option.disabled=true);message('正在保存…');
    try{
-    const data=await request('update_cell',card.id,{field,value:select.value});
-    finish();if(epoch===boardEpoch){Object.assign(card,data.card);render();message('已保存');}
-   }catch(error){finish();if(epoch===boardEpoch)message(error.message,true);}
+    const data=await request('update_cell',card.id,{field,value});
+    finish();if(epoch===boardEpoch){Object.assign(card,data.card);render();message('已保存到 Trello');}
+   }catch(error){finish();if(epoch===boardEpoch)message('保存失败：'+error.message,true);}
   };
-  select.focus();
+  for(const [value,label] of options){
+   const option=button(label,()=>save(value));option.setAttribute('role','option');option.setAttribute('aria-selected',String(value===current));menu.append(option);
+   option.onmousedown=event=>{if(event.button===0)event.preventDefault();};
+  }
+  menu.onfocusout=event=>{if(!edit.saving&&!menu.contains(event.relatedTarget))finish();};
+  menu.onkeydown=event=>{
+   event.stopPropagation();
+   if(edit.saving)return;
+   if(event.key==='Escape'){event.preventDefault();finish();cell.focus();return;}
+   const choices=[...menu.querySelectorAll('button')],index=choices.indexOf(document.activeElement);
+   const next=event.key==='ArrowDown'?(index+1)%choices.length:event.key==='ArrowUp'?(index-1+choices.length)%choices.length:event.key==='Home'?0:event.key==='End'?choices.length-1:null;
+   if(next!==null){event.preventDefault();choices[next]?.focus();}
+  };
+  (menu.querySelector('[aria-selected=true]')||menu.firstElementChild)?.focus();
  }
  async function loadBoards(){const epoch=++boardEpoch;busy=true;message('正在检测 Trello…');try{const data=await request('boards');if(epoch!==boardEpoch)return;boards=(data.boards||[]).filter(b=>!b.closed);const select=document.getElementById('trello-board');select.replaceChildren(new Option('选择看板…',''));boards.forEach(b=>select.add(new Option(b.name,b.id)));if(!boards.some(b=>b.id===board)){board='';window.cnoteTools.setTrelloBoard('');}select.value=board;message('');if(board){await loadBoard();return;}busy=false;guide(boards.length?'请选择右上方的 Trello 看板。':'当前账号没有可用看板，请先在 Trello 创建看板。');}catch(error){if(epoch!==boardEpoch)return;busy=false;failure(error,loadBoards);}}
  async function loadBoard(silent=false){
@@ -204,6 +217,23 @@
    menu.addEventListener('toggle',()=>{if(!menu.matches(':popover-open'))closeMenu();});save.focus();
   });
  }
+ function imageRecognition(attachment,cardId,epoch){
+  const panel=node('div',null,'trello-image-transcript');panel.hidden=true;panel.setAttribute('role','status');
+  const control=button('',async()=>{
+   if(control.disabled)return;
+   control.disabled=true;control.setAttribute('aria-busy','true');panel.hidden=false;panel.textContent='正在识别图片文字…';
+   try{
+    const result=await request('recognize_image',cardId,{attachment:attachment.id});
+    if(epoch!==detailEpoch||!panel.isConnected)return;
+    if(typeof result?.text!=='string'||!result.text.trim())throw Error('未识别到文字，请重试');
+    panel.replaceChildren(node('strong','识别文本'),node('pre',result.text));
+   }catch(error){if(epoch===detailEpoch&&panel.isConnected)panel.textContent='识别失败：'+error.message;}
+   finally{control.disabled=false;control.removeAttribute('aria-busy');}
+  },'trello-image-ocr trello-image-icon');
+  control.title='识别图片文字';control.setAttribute('aria-label','识别图片文字');
+  const icon=node('i',null,'bi bi-upc-scan');icon.setAttribute('aria-hidden','true');control.append(icon);
+  return {control,panel};
+ }
  function closeImageViewer(){if(imageViewer){const current=imageViewer;imageViewer=null;current.observer.disconnect();current.dialog.close();current.dialog.remove();}}
  async function openImageViewer(attachment,cardId,epoch,thumbnail){
   closeImageViewer();if(epoch!==detailEpoch)return;
@@ -218,7 +248,8 @@
   const iconButton=(label,icon,shortcut,action)=>{const control=button('',action,'trello-image-icon');control.setAttribute('aria-label',label);if(shortcut)control.setAttribute('aria-keyshortcuts',shortcut==='+'?'Plus':shortcut);control.title=shortcut?`${label}（${shortcut}）`:label;const glyph=node('i',null,'bi bi-'+icon);glyph.setAttribute('aria-hidden','true');control.append(glyph);return control;};
   toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','图片查看工具');
   const feedback=text=>{status.textContent=text;};
-  toolbar.append(title,iconButton('缩小','zoom-out','-',actions.zoomOut),zoom,iconButton('放大','zoom-in','+',actions.zoomIn),iconButton('适应窗口','fullscreen-exit','0',actions.fit),iconButton('原始大小','arrows-fullscreen','1',actions.actual),iconButton('逆时针旋转','arrow-counterclockwise','Shift+R',actions.left),iconButton('顺时针旋转','arrow-clockwise','R',actions.right),iconButton('分享图片','share',null,()=>shareImage(attachment,cardId,feedback)),iconButton('关闭图片','x-lg','Escape',closeImageViewer));
+  const recognition=imageRecognition(attachment,cardId,epoch);
+  toolbar.append(title,recognition.control,iconButton('缩小','zoom-out','-',actions.zoomOut),zoom,iconButton('放大','zoom-in','+',actions.zoomIn),iconButton('适应窗口','fullscreen-exit','0',actions.fit),iconButton('原始大小','arrows-fullscreen','1',actions.actual),iconButton('逆时针旋转','arrow-counterclockwise','Shift+R',actions.left),iconButton('顺时针旋转','arrow-clockwise','R',actions.right),iconButton('分享图片','share',null,()=>shareImage(attachment,cardId,feedback)),iconButton('关闭图片','x-lg','Escape',closeImageViewer));
   dialog.addEventListener('keydown',event=>{
    if(event.target.closest('.trello-image-menu'))return;
    if(event.isComposing||event.altKey)return;
@@ -233,7 +264,7 @@
    }
    if(action){event.preventDefault();event.stopImmediatePropagation();action();}
   },true);
-  dialog.append(toolbar,status,viewport);root.append(dialog);const observer=new ResizeObserver(()=>{if(fit)layout();});const current={dialog,observer};imageViewer=current;dialog.addEventListener('cancel',event=>{event.preventDefault();closeImageViewer();});dialog.showModal();observer.observe(viewport);
+  dialog.append(toolbar,status,viewport,recognition.panel);root.append(dialog);const observer=new ResizeObserver(()=>{if(fit)layout();});const current={dialog,observer};imageViewer=current;dialog.addEventListener('cancel',event=>{event.preventDefault();closeImageViewer();});dialog.showModal();observer.observe(viewport);
   imageMenu(image,attachment,cardId,feedback);
   image.onload=layout;image.src=thumbnail;
   let drag=null;viewport.onpointerdown=event=>{if(event.button!==0)return;drag={x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop};viewport.setPointerCapture(event.pointerId);viewport.classList.add('dragging');event.preventDefault();};viewport.onpointermove=event=>{if(drag){viewport.scrollLeft=drag.left+drag.x-event.clientX;viewport.scrollTop=drag.top+drag.y-event.clientY;}};viewport.onpointerup=viewport.onpointercancel=()=>{drag=null;viewport.classList.remove('dragging');};
@@ -255,8 +286,21 @@
    const info=node('div'),name=node('strong',attachment.name||'附件');name.title=attachment.name||'附件';info.append(name,node('small',date(attachment)?`上传于 ${new Date(date(attachment)).toLocaleString()}`:'上传时间未知'));
    const knownImage=attachment.mimeType?.startsWith('image/')||/\.(jpe?g|png|webp|gif|avif|heic|heif|bmp|tiff?)$/i.test(attachment.name||'');
    const actions=node('div',null,'trello-attachment-actions');
+   const transcript=node('div',null,'trello-audio-transcript');transcript.hidden=true;transcript.setAttribute('role','status');
    const addAudioDownload=()=>{
     if(actions.querySelector('.trello-audio-download')||attachment.isUpload===false)return;
+    const transcribe=button('ASR',async()=>{
+     if(transcribe.disabled)return;
+     transcribe.disabled=true;transcribe.textContent='转写中…';transcript.hidden=false;transcript.textContent='正在识别音频…';
+     try{
+      const result=await request('transcribe_audio',cardId,{attachment:attachment.id});
+      if(epoch!==detailEpoch||!transcript.isConnected)return;
+      if(typeof result?.text!=='string'||!result.text.trim())throw Error('未识别到文本，请重试');
+      transcript.replaceChildren(node('strong','ASR 转写文本'),node('pre',result.text));
+     }catch(error){if(epoch===detailEpoch&&transcript.isConnected)transcript.textContent='转写失败：'+error.message;}
+     finally{transcribe.disabled=false;transcribe.textContent='ASR';}
+    },'trello-audio-asr');
+    transcribe.title='ASR 转文本';transcribe.setAttribute('aria-label','ASR 转文本');
     const download=button('',async()=>{
      download.disabled=true;
      try{const result=await request('download_audio',cardId,{attachment:attachment.id,name:attachment.name});if(epoch===detailEpoch)message(result.saved?'音频已保存':'已取消保存');}
@@ -264,14 +308,17 @@
      finally{download.disabled=false;}
     },'trello-audio-download');
     download.title='Download audio';download.setAttribute('aria-label','Download audio');
-    const icon=node('i',null,'bi bi-download');icon.setAttribute('aria-hidden','true');download.append(icon);actions.append(download);
+    const icon=node('i',null,'bi bi-download');icon.setAttribute('aria-hidden','true');download.append(icon);actions.append(transcribe,download);
    };
+   const recognition=imageRecognition(attachment,cardId,epoch);
+   const addImageRecognition=()=>{if(attachment.isUpload===false)return;actions.append(recognition.control);caption.append(actions);};
    figure.classList.toggle('trello-image-tile',knownImage);caption.append(info);if(!knownImage){
     const open=button('',()=>openLink(attachment.url),'trello-open-attachment');open.title='打开原附件';open.setAttribute('aria-label','打开原附件');
     const icon=node('i',null,'bi bi-box-arrow-up-right');icon.setAttribute('aria-hidden','true');open.append(icon);actions.append(open);caption.append(actions);
    }
+   if(knownImage)addImageRecognition();
    if(attachment.mimeType?.startsWith('audio/')||/\.(mp3|m4a|wav|ogg|opus|aac)$/i.test(attachment.name||''))addAudioDownload();
-   const preview=node('div',attachment.isUpload===false?(knownImage?'外部图片附件暂不支持本地读取。':'外部链接附件，可打开原附件查看。'):'正在加载附件…','trello-attachment-content');figure.append(caption,preview);gallery.append(figure);
+   const preview=node('div',attachment.isUpload===false?(knownImage?'外部图片附件暂不支持本地读取。':'外部链接附件，可打开原附件查看。'):'正在加载附件…','trello-attachment-content');figure.append(caption,preview,transcript,recognition.panel);gallery.append(figure);
    if(attachment.isUpload===false)continue;
    const load=async()=>{
     if(epoch!==detailEpoch||!preview.isConnected)return;
@@ -283,7 +330,7 @@
      const bytes=Uint8Array.from(atob(result.base64),c=>c.charCodeAt(0)),mime=result.mime||'';
      if(mime.startsWith('text/')||mime==='application/json'){preview.replaceChildren(node('pre',new TextDecoder().decode(bytes)));return;}
      const url=URL.createObjectURL(new Blob([bytes],{type:mime}));mediaUrls.add(url);let media;
-     if(mime.startsWith('image/')){media=node('img');media.alt=attachment.name||'附件图片';figure.classList.add('trello-image-tile');caption.replaceChildren(info);}
+     if(mime.startsWith('image/')){media=node('img');media.alt=attachment.name||'附件图片';figure.classList.add('trello-image-tile');caption.replaceChildren(info);addImageRecognition();}
      else if(mime.startsWith('audio/')||mime.startsWith('video/')){if(mime.startsWith('audio/'))addAudioDownload();media=node(mime.startsWith('audio/')?'audio':'video');media.controls=true;media.preload='metadata';media.setAttribute('aria-label',attachment.name||'附件');if(media.tagName==='VIDEO')media.playsInline=true;}
      else if(mime==='application/pdf'){media=node('iframe');media.title=attachment.name||'PDF 附件';media.setAttribute('sandbox','');}
      else {URL.revokeObjectURL(url);mediaUrls.delete(url);failed('此附件暂不支持内嵌预览，请打开原附件。');return;}
