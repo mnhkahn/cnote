@@ -225,7 +225,20 @@
    const figure=node('figure',null,'trello-attachment-preview'),caption=node('figcaption');
    const info=node('div'),name=node('strong',attachment.name||'附件');name.title=attachment.name||'附件';info.append(name,node('small',date(attachment)?`上传于 ${new Date(date(attachment)).toLocaleString()}`:'上传时间未知'));
    const knownImage=attachment.mimeType?.startsWith('image/')||/\.(jpe?g|png|webp|gif|avif|heic|heif|bmp|tiff?)$/i.test(attachment.name||'');
-   figure.classList.toggle('trello-image-tile',knownImage);caption.append(info);if(!knownImage)caption.append(button('打开原附件',()=>openLink(attachment.url)));
+   const actions=node('div',null,'trello-attachment-actions');
+   const addAudioDownload=()=>{
+    if(actions.querySelector('.trello-audio-download')||attachment.isUpload===false)return;
+    const download=button('',async()=>{
+     download.disabled=true;
+     try{const result=await request('download_audio',cardId,{attachment:attachment.id,name:attachment.name});if(epoch===detailEpoch)message(result.saved?'音频已保存':'已取消保存');}
+     catch(error){if(epoch===detailEpoch)message('下载失败：'+error.message,true);}
+     finally{download.disabled=false;}
+    },'trello-audio-download');
+    download.title='Download audio';download.setAttribute('aria-label','Download audio');
+    const icon=node('i',null,'bi bi-download');icon.setAttribute('aria-hidden','true');download.append(icon);actions.append(download);
+   };
+   figure.classList.toggle('trello-image-tile',knownImage);caption.append(info);if(!knownImage){actions.append(button('打开原附件',()=>openLink(attachment.url)));caption.append(actions);}
+   if(attachment.mimeType?.startsWith('audio/')||/\.(mp3|m4a|wav|ogg|opus|aac)$/i.test(attachment.name||''))addAudioDownload();
    const preview=node('div',attachment.isUpload===false?(knownImage?'外部图片附件暂不支持本地读取。':'外部链接附件，可打开原附件查看。'):'正在加载附件…','trello-attachment-content');figure.append(caption,preview);gallery.append(figure);
    if(attachment.isUpload===false)continue;
    const load=async()=>{
@@ -239,7 +252,7 @@
      if(mime.startsWith('text/')||mime==='application/json'){preview.replaceChildren(node('pre',new TextDecoder().decode(bytes)));return;}
      const url=URL.createObjectURL(new Blob([bytes],{type:mime}));mediaUrls.add(url);let media;
      if(mime.startsWith('image/')){media=node('img');media.alt=attachment.name||'附件图片';figure.classList.add('trello-image-tile');caption.replaceChildren(info);}
-     else if(mime.startsWith('audio/')||mime.startsWith('video/')){media=node(mime.startsWith('audio/')?'audio':'video');media.controls=true;media.preload='metadata';media.setAttribute('aria-label',attachment.name||'附件');if(media.tagName==='VIDEO')media.playsInline=true;}
+     else if(mime.startsWith('audio/')||mime.startsWith('video/')){if(mime.startsWith('audio/'))addAudioDownload();media=node(mime.startsWith('audio/')?'audio':'video');media.controls=true;media.preload='metadata';media.setAttribute('aria-label',attachment.name||'附件');if(media.tagName==='VIDEO')media.playsInline=true;}
      else if(mime==='application/pdf'){media=node('iframe');media.title=attachment.name||'PDF 附件';media.setAttribute('sandbox','');}
      else {URL.revokeObjectURL(url);mediaUrls.delete(url);failed('此附件暂不支持内嵌预览，请打开原附件。');return;}
      media.onerror=()=>{if(epoch===detailEpoch&&preview.isConnected){URL.revokeObjectURL(url);mediaUrls.delete(url);failed(mime.startsWith('image/')?'图片加载失败，请重试。':'此附件无法在当前浏览器预览，可重试或打开原附件。');}};

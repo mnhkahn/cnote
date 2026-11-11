@@ -15,3 +15,5 @@
 
 .trello-detail-body a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
 .trello-action-text:has(a){white-space:normal;overflow-wrap:anywhere}
+
+.trello-attachment-preview figcaption>div:first-child{min-width:0}.trello-attachment-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}#trello-tool .trello-audio-download{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;font-size:16px}#trello-tool .trello-audio-download:disabled{opacity:.5;cursor:wait}

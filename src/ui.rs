@@ -476,7 +476,9 @@ impl Notebook {
                 }
             }
             "trello" if v["op"] == "copy_image" => self.copy_trello_image(v, cx),
-            "trello" if v["op"] == "download" => self.download_trello_image(v, cx),
+            "trello" if v["op"] == "download" || v["op"] == "download_audio" => {
+                self.download_trello_attachment(v, cx)
+            }
             "trello" if v["op"] == "share_image" => self.share_trello_image(v, cx),
             "trello" => {
                 if smoke() && std::env::var_os("CNOTE_IMAGE_SAVE_TEST").is_some() {
@@ -583,7 +585,14 @@ impl Notebook {
             }
         }
     }
-    fn trello_original_image(mut v: Value) -> anyhow::Result<(Vec<u8>, String)> {
+    fn trello_original_image(v: Value) -> anyhow::Result<(Vec<u8>, String)> {
+        Self::trello_original_media(v, "image/", "图片")
+    }
+    fn trello_original_media(
+        mut v: Value,
+        prefix: &str,
+        label: &str,
+    ) -> anyhow::Result<(Vec<u8>, String)> {
         use base64::Engine;
         // Reuse original bytes already loaded by the viewer.
         let data = if v["image"].is_object() {
@@ -596,17 +605,17 @@ impl Notebook {
         };
         let mime = data["mime"]
             .as_str()
-            .filter(|mime| mime.starts_with("image/"))
-            .ok_or_else(|| anyhow::anyhow!("附件不是图片"))?;
+            .filter(|mime| mime.starts_with(prefix))
+            .ok_or_else(|| anyhow::anyhow!("附件不是{label}"))?;
         let encoded = data["base64"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("图片数据缺失"))?;
+            .ok_or_else(|| anyhow::anyhow!("{label}数据缺失"))?;
         const LIMIT: usize = 25 * 1024 * 1024;
-        anyhow::ensure!(encoded.len() <= LIMIT.div_ceil(3) * 4, "图片超过 25 MB");
+        anyhow::ensure!(encoded.len() <= LIMIT.div_ceil(3) * 4, "{label}超过 25 MB");
         let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
         anyhow::ensure!(
             !bytes.is_empty() && bytes.len() <= LIMIT,
-            "图片为空或超过 25 MB"
+            "{label}为空或超过 25 MB"
         );
         Ok((bytes, mime.to_owned()))
     }
@@ -684,12 +693,14 @@ impl Notebook {
         })
         .detach();
     }
-    fn download_trello_image(&self, v: Value, cx: &mut Context<Self>) {
+    fn download_trello_attachment(&self, v: Value, cx: &mut Context<Self>) {
+        let audio = v["op"] == "download_audio";
+        let label = if audio { "音频" } else { "图片" };
         let request = v["request"].as_u64().unwrap_or(0);
         let name = v["name"]
             .as_str()
             .filter(|name| !name.is_empty())
-            .unwrap_or("image.jpg")
+            .unwrap_or(if audio { "audio.m4a" } else { "image.jpg" })
             .replace(['/', '\\', ':'], "_");
         let directory = directories::UserDirs::new()
             .and_then(|dirs| dirs.download_dir().map(PathBuf::from))
@@ -700,18 +711,18 @@ impl Notebook {
                 Ok(Ok(Some(path))) => {
                     let _ = this.update(cx, |this, _| {
                         this.js(&format!("window.cnoteTrello?.receive({})",
-                            json!({"request":request,"progress":"正在下载原图…"})));
+                            json!({"request":request,"progress":if audio { "正在下载音频…" } else { "正在下载原图…" }})));
                     });
                     cx.background_executor().spawn(async move {
-                        let (bytes, _) = Self::trello_original_image(v)?;
+                        let (bytes, _) = if audio { Self::trello_original_media(v, "audio/", label)? } else { Self::trello_original_image(v)? };
                         std::fs::write(path, bytes)
-                            .map_err(|_| anyhow::anyhow!("图片保存失败，请检查目标目录权限和可用空间"))?;
+                            .map_err(|_| anyhow::anyhow!("{label}保存失败，请检查目标目录权限和可用空间"))?;
                         Ok(json!({"saved":true}))
                     }).await
                 }
                 Ok(Ok(None)) => Ok(json!({"saved":false})),
                 Ok(Err(error)) => Err(error),
-                Err(_) => Err(anyhow::anyhow!("图片保存窗口未返回结果，请重试")),
+                Err(_) => Err(anyhow::anyhow!("{label}保存窗口未返回结果，请重试")),
             };
             let event = match result {
                 Ok(data) => json!({"request":request,"data":data}),
