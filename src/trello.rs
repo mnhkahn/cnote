@@ -148,10 +148,10 @@ impl Api {
             .send()
             .map_err(|_| anyhow::anyhow!("无法连接 Trello，请检查网络后重试"))?;
         match response.status() {
-            StatusCode::UNAUTHORIZED => return Err(AuthRequired.into()),
-            StatusCode::FORBIDDEN if writing => bail!(
-                "没有权限修改此 Trello 卡片；旧的只读授权请在关联设置中重新授权读写权限，并确认你有看板编辑权限"
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN if writing => bail!(
+                "Trello 拒绝写入，请在关联设置中重新授权读写权限；若仍可查看卡片，请检查是否使用了旧的只读授权，并确认你有看板编辑权限"
             ),
+            StatusCode::UNAUTHORIZED => return Err(AuthRequired.into()),
             StatusCode::FORBIDDEN => bail!("没有权限读取此 Trello 内容，请检查授权或选择其他看板"),
             StatusCode::TOO_MANY_REQUESTS => bail!("Trello 请求过于频繁，请稍后重试"),
             status if !status.is_success() => {
@@ -777,7 +777,7 @@ mod tests {
             io::{BufRead, BufReader, Write},
             net::TcpListener,
         };
-        for status in [200, 403] {
+        for status in [200, 401, 403] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
             let server = std::thread::spawn(move || {
@@ -835,8 +835,11 @@ mod tests {
             if status == 200 {
                 assert_eq!(result.unwrap()["desc"], "打分结果：优");
             } else {
-                let error = result.unwrap_err().to_string();
+                let failure = result.unwrap_err();
+                assert_eq!(error_code(&failure), "request_failed");
+                let error = failure.to_string();
                 assert!(error.contains("重新授权读写权限"));
+                assert!(!error.contains("授权已失效"));
                 assert!(!error.contains("secret"));
             }
             server.join().unwrap();

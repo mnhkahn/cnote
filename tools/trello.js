@@ -264,7 +264,8 @@
    }
    if(action){event.preventDefault();event.stopImmediatePropagation();action();}
   },true);
-  dialog.append(toolbar,status,viewport,recognition.panel);root.append(dialog);const observer=new ResizeObserver(()=>{if(fit)layout();});const current={dialog,observer};imageViewer=current;dialog.addEventListener('cancel',event=>{event.preventDefault();closeImageViewer();});dialog.showModal();observer.observe(viewport);
+  const content=node('div',null,'trello-image-content');content.append(viewport,recognition.panel);
+  dialog.append(toolbar,status,content);root.append(dialog);const observer=new ResizeObserver(()=>{if(fit)layout();});const current={dialog,observer};imageViewer=current;dialog.addEventListener('cancel',event=>{event.preventDefault();closeImageViewer();});dialog.showModal();observer.observe(viewport);
   imageMenu(image,attachment,cardId,feedback);
   image.onload=layout;image.src=thumbnail;
   let drag=null;viewport.onpointerdown=event=>{if(event.button!==0)return;drag={x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop};viewport.setPointerCapture(event.pointerId);viewport.classList.add('dragging');event.preventDefault();};viewport.onpointermove=event=>{if(drag){viewport.scrollLeft=drag.left+drag.x-event.clientX;viewport.scrollTop=drag.top+drag.y-event.clientY;}};viewport.onpointerup=viewport.onpointercancel=()=>{drag=null;viewport.classList.remove('dragging');};
@@ -310,15 +311,12 @@
     download.title='Download audio';download.setAttribute('aria-label','Download audio');
     const icon=node('i',null,'bi bi-download');icon.setAttribute('aria-hidden','true');download.append(icon);actions.append(transcribe,download);
    };
-   const recognition=imageRecognition(attachment,cardId,epoch);
-   const addImageRecognition=()=>{if(attachment.isUpload===false)return;actions.append(recognition.control);caption.append(actions);};
    figure.classList.toggle('trello-image-tile',knownImage);caption.append(info);if(!knownImage){
     const open=button('',()=>openLink(attachment.url),'trello-open-attachment');open.title='打开原附件';open.setAttribute('aria-label','打开原附件');
     const icon=node('i',null,'bi bi-box-arrow-up-right');icon.setAttribute('aria-hidden','true');open.append(icon);actions.append(open);caption.append(actions);
    }
-   if(knownImage)addImageRecognition();
    if(attachment.mimeType?.startsWith('audio/')||/\.(mp3|m4a|wav|ogg|opus|aac)$/i.test(attachment.name||''))addAudioDownload();
-   const preview=node('div',attachment.isUpload===false?(knownImage?'外部图片附件暂不支持本地读取。':'外部链接附件，可打开原附件查看。'):'正在加载附件…','trello-attachment-content');figure.append(caption,preview,transcript,recognition.panel);gallery.append(figure);
+   const preview=node('div',attachment.isUpload===false?(knownImage?'外部图片附件暂不支持本地读取。':'外部链接附件，可打开原附件查看。'):'正在加载附件…','trello-attachment-content');figure.append(caption,preview,transcript);gallery.append(figure);
    if(attachment.isUpload===false)continue;
    const load=async()=>{
     if(epoch!==detailEpoch||!preview.isConnected)return;
@@ -330,7 +328,7 @@
      const bytes=Uint8Array.from(atob(result.base64),c=>c.charCodeAt(0)),mime=result.mime||'';
      if(mime.startsWith('text/')||mime==='application/json'){preview.replaceChildren(node('pre',new TextDecoder().decode(bytes)));return;}
      const url=URL.createObjectURL(new Blob([bytes],{type:mime}));mediaUrls.add(url);let media;
-     if(mime.startsWith('image/')){media=node('img');media.alt=attachment.name||'附件图片';figure.classList.add('trello-image-tile');caption.replaceChildren(info);addImageRecognition();}
+     if(mime.startsWith('image/')){media=node('img');media.alt=attachment.name||'附件图片';figure.classList.add('trello-image-tile');caption.replaceChildren(info);}
      else if(mime.startsWith('audio/')||mime.startsWith('video/')){if(mime.startsWith('audio/'))addAudioDownload();media=node(mime.startsWith('audio/')?'audio':'video');media.controls=true;media.preload='metadata';media.setAttribute('aria-label',attachment.name||'附件');if(media.tagName==='VIDEO')media.playsInline=true;}
      else if(mime==='application/pdf'){media=node('iframe');media.title=attachment.name||'PDF 附件';media.setAttribute('sandbox','');}
      else {URL.revokeObjectURL(url);mediaUrls.delete(url);failed('此附件暂不支持内嵌预览，请打开原附件。');return;}
