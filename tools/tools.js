@@ -164,11 +164,23 @@
  function renderTable(){
   const rows=state.rows,width=rows[0]?.length||0;tablePage=Math.min(tablePage,Math.max(0,Math.ceil((rows.length-1)/ROW_PAGE)-1));columnPage=Math.min(columnPage,Math.max(0,Math.ceil(width/COL_PAGE)-1));
   const start=1+tablePage*ROW_PAGE,end=Math.min(rows.length,start+ROW_PAGE),left=columnPage*COL_PAGE,right=Math.min(width,left+COL_PAGE),table=document.createElement('table');table.className='data-table';
-  const cell=(row,y,x,header=false)=>{const td=document.createElement(header?'th':'td'),input=document.createElement('input');input.value=String(rows[y]?.[x]??'');input.setAttribute('aria-label',`${header?'表头':'第 '+y+' 行'}，第 ${x+1} 列`);input.dataset.row=y;input.dataset.column=x;
+  const cell=(row,y,x,header=false)=>{const value=String(rows[y]?.[x]??''),td=document.createElement(header?'th':'td'),input=document.createElement(value.includes('\n')?'textarea':'input');input.value=value;if(input.tagName==='TEXTAREA')input.rows=Math.min(6,value.split('\n').length);input.setAttribute('aria-label',`${header?'表头':'第 '+y+' 行'}，第 ${x+1} 列`);input.dataset.row=y;input.dataset.column=x;
    let before;
    input.onfocus=()=>{selectedRow=y;before=state.rows;};
    input.oninput=()=>{const next=state.rows.slice();next[y]=next[y].slice();next[y][x]=input.value;state.rows=next;markDirty();};
    input.onchange=()=>{if(before&&before!==state.rows)remember(before,state.rows);if(header)renderColumns();};
+   input.onpaste=event=>{
+    const clipboard=event.clipboardData;if(!clipboard)return;
+    let pasted=window.cnoteTableText.detect(clipboard.getData('text/plain'));
+    const html=clipboard.getData('text/html');
+    if(html){const template=document.createElement('template');template.innerHTML=html;const table=template.content.querySelector('table');if(table)pasted=[...table.rows].map(r=>[...r.cells].map(c=>c.innerText??c.textContent));}
+    if(!pasted?.length)return;
+    event.preventDefault();const height=Math.max(state.rows.length,y+pasted.length);let width=state.rows[0]?.length||0;for(const row of pasted)width=Math.max(width,x+row.length);
+    if(height>200000||width>2048||height*width>2000000){status('表格最多 20 万行、2048 列、200 万个单元格',true);return;}
+    const next=Array.from({length:height},(_,i)=>Array.from({length:width},(_,j)=>state.rows[i]?.[j]??''));
+    for(let i=0;i<pasted.length;i++)for(let j=0;j<pasted[i].length;j++)next[y+i][x+j]=pasted[i][j];
+    replaceRows(next);status('已粘贴表格 · 可撤销');
+   };
    td.append(input);row.append(td);
   };
   if(rows.length){const head=document.createElement('thead'),tr=document.createElement('tr'),th=document.createElement('th');th.className='row-number';th.textContent='#';tr.append(th);for(let x=left;x<right;x++)cell(tr,0,x,true);head.append(tr);table.append(head);
@@ -214,7 +226,7 @@
  $('table-input').oninput=()=>{state.tableInput=$('table-input').value;markDirty();};
  $('table-open-file').onclick=()=>$('table-file').click();
  $('table-import').onclick=()=>importData($('table-input').value,$('table-import-format').value);
- $('table-file').onchange=async event=>{const file=event.target.files[0];if(!file)return;if(file.size>MAX){status('文件最大支持 20 MB',true);return;}const extension=file.name.split('.').at(-1).toLowerCase(),format={xlsx:'xlsx',json:'json',jsonl:'jsonl',ndjson:'jsonl',md:'markdown',html:'html',htm:'html',sql:'sql'}[extension]||'csv';if(format==='xlsx')await importData('',format,await file.arrayBuffer());else await importData(await file.text(),format);event.target.value='';};
+ $('table-file').onchange=async event=>{const file=event.target.files[0];if(!file)return;if(file.size>MAX){status('文件最大支持 20 MB',true);return;}const extension=file.name.split('.').at(-1).toLowerCase(),format={xlsx:'xlsx',json:'json',jsonl:'jsonl',ndjson:'jsonl',md:'markdown',html:'html',htm:'html',sql:'sql'}[extension]||'auto';if(format==='xlsx')await importData('',format,await file.arrayBuffer());else await importData(await file.text(),format);event.target.value='';};
  $('table-copy').onclick=()=>exportData(true);$('table-export').onclick=()=>exportData();$('table-print').onclick=printTable;
  $('table-undo').onclick=()=>{const change=history.pop();if(change){future.push(change);state.rows=change.before;markDirty();renderTable();}};
  $('table-redo').onclick=()=>{const change=future.pop();if(change){history.push(change);state.rows=change.after;markDirty();renderTable();}};

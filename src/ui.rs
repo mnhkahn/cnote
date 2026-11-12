@@ -94,6 +94,7 @@ impl Notebook {
                 include_str!("../tools/vendor/worker.b64"),
             )
             .replace("/* TOOL_ACE */", include_str!("../tools/vendor/ace.b64"))
+            .replace("/* TABLE_TEXT */", include_str!("../tools/table-text.js"))
             .replace("/* WORKSPACE */", workspace::SHORTCUT_SCRIPT)
             .replace("/* THEME_CATALOG */ []", crate::theme::CATALOG)
             .replace("/* TOOL_SCRIPT */", include_str!("../tools/tools.js"))

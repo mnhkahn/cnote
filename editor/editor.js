@@ -319,7 +319,10 @@
   [null,'一级标题',()=>command('formatBlock','h1'),'H1'],[null,'二级标题',()=>command('formatBlock','h2'),'H2'],[null,'三级标题',()=>command('formatBlock','h3'),'H3'],null,
   ['list-ul','无序列表','insertUnorderedList'],['list-ol','有序列表','insertOrderedList'],['check2-square','待办事项',task],['table','插入表格',()=>{
    remember();const rows=document.createElement('input'),cols=document.createElement('input');rows.type=cols.type='number';rows.min=cols.min='1';rows.max=cols.max='30';rows.value='3';cols.value='3';
-   modal('table','插入表格',[text('p','行数 / 列数（1–30）'),rows,cols],[cancel,['插入',()=>{const r=Math.min(30,Math.max(1,Number(rows.value)||3)),c=Math.min(30,Math.max(1,Number(cols.value)||3));let h='<table><tbody>';for(let i=0;i<r;i++){h+='<tr>';for(let j=0;j<c;j++)h+=i===0?'<th>标题</th>':'<td><br></td>';h+='</tr>';}insert(h+'</tbody></table><p><br></p>');},'primary']]);
+   modal('table','插入表格',[text('p','行数 / 列数（1–30）'),rows,cols],[cancel,['插入',()=>{const r=Math.min(30,Math.max(1,Number(rows.value)||3)),c=Math.min(30,Math.max(1,Number(cols.value)||3));let h='<table><tbody>';for(let i=0;i<r;i++){h+='<tr>';for(let j=0;j<c;j++)h+=i===0?'<th>标题</th>':'<td><br></td>';h+='</tr>';}
+    // A modal makes the editor inert; close it before restoring the caret and editing.
+    dialog.close();insert(h+'</tbody></table><p><br></p>');
+   },'primary']]);
   }],null,['unindent','减少缩进','outdent'],['indent','增加缩进','indent'],['arrow-counterclockwise','撤销','undo'],['arrow-clockwise','重做','redo'],['eraser','清除格式','removeFormat']];
  const toolbar=document.getElementById('toolbar');
  for(const tool of tools){if(!tool){const s=document.createElement('span');s.className='separator';toolbar.append(s);continue;}const [icon,label,cmd,caption]=tool,b=document.createElement('button');b.title=label;b.setAttribute('aria-label',label);if(icon){const i=document.createElement('i');i.className=`bi bi-${icon}`;b.append(i);}else b.textContent=caption;b.onmousedown=e=>{e.preventDefault();remember();};b.onclick=()=>typeof cmd==='function'?cmd():command(cmd);toolbar.append(b);}
@@ -351,7 +354,12 @@
   const clipboard=e.clipboardData;if(!clipboard)return;e.preventDefault();remember();
   const image=[...clipboard.items].find(i=>i.type.startsWith('image/'));
   if(image){const file=image.getAsFile();if(!file||file.size>8*1024*1024){receive({type:'error',message:'图片最大支持 8 MB，请缩小后重试。'});return;}const target=id;const reader=new FileReader();reader.onload=()=>{if(target!==id)return;const img=document.createElement('img');img.src=reader.result;img.alt='粘贴的图片';insert(img.outerHTML);};reader.readAsDataURL(file);return;}
-  const html=clipboard.getData('text/html'),plain=clipboard.getData('text/plain');if(html)insert(sanitize(html));else if(safeURL(plain.trim())){const a=text('a',plain.trim());a.href=plain.trim();insert(a.outerHTML);}else command('insertText',plain);
+  const html=clipboard.getData('text/html'),plain=clipboard.getData('text/plain');
+  // Real HTML tables preserve formatting; terminal apps often supply only a <pre> wrapper.
+  const safe=html?sanitize(html):'',rows=/<table[\s>]/i.test(safe)?null:window.cnoteTableText.detect(plain);
+  if(rows){const table=document.createElement('table'),tbody=document.createElement('tbody');
+   for(const [i,row] of rows.entries()){const tr=document.createElement('tr');for(const value of row){const cell=document.createElement(i?'td':'th');const lines=value.split('\n');for(const [j,line] of lines.entries()){if(j)cell.append(document.createElement('br'));cell.append(document.createTextNode(line));}if(!value)cell.append(document.createElement('br'));tr.append(cell);}tbody.append(tr);}table.append(tbody);insert(table.outerHTML+'<p><br></p>');
+  }else if(html)insert(safe);else if(safeURL(plain.trim())){const a=text('a',plain.trim());a.href=plain.trim();insert(a.outerHTML);}else command('insertText',plain);
  });
  const menu=document.getElementById('context');
  const tableActions=[['在上方插入行','row-before'],['在下方插入行','row-after'],['在左侧插入列','col-before'],['在右侧插入列','col-after'],['删除行','delete-row'],['删除列','delete-col']];

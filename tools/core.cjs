@@ -143,28 +143,7 @@ function compare({left,right}){
  }
  return {rows,added,removed,addedText:parts.filter(p=>p.added).map(p=>p.value).join(''),removedText:parts.filter(p=>p.removed).map(p=>p.value).join('')};
 }
-function parseCSV(text,delimiter='auto'){
- check(text);text=text.replace(/^\uFEFF/,'');if(!text)return [];
- if(delimiter==='auto'){
-  // Count candidate separators outside quoted fields, including quoted newlines.
-  let quoted=false;const counts={',':0,'\t':0,';':0};
-  for(let i=0;i<text.length;i++){const c=text[i];if(c==='"'){if(quoted&&text[i+1]==='"'){i++;continue;}quoted=!quoted;}else if(!quoted){if(c==='\n'||c==='\r')break;if(c in counts)counts[c]++;}}
-  delimiter=Object.keys(counts).sort((a,b)=>counts[b]-counts[a])[0];
- }
- if(delimiter.length!==1)throw Error('分隔符必须是单个字符');
- const rows=[];let row=[],value='',quoted=false,closed=false;
- for(let i=0;i<text.length;i++){
-  const c=text[i];
-  if(quoted){if(c==='"'){if(text[i+1]==='"'){value+='"';i++;}else{quoted=false;closed=true;}}else value+=c;continue;}
-  if(c===delimiter){row.push(value);value='';closed=false;}
-  else if(c==='\r'||c==='\n'){if(c==='\r'&&text[i+1]==='\n')i++;row.push(value);rows.push(row);row=[];value='';closed=false;}
-  else if(c==='"'&&value===''&&!closed)quoted=true;
-  else {if(closed||c==='"')throw Error('CSV 引号格式错误');value+=c;}
- }
- if(quoted)throw Error('CSV 存在未闭合引号');
- if(value!==''||row.length||closed) {row.push(value);rows.push(row);}
- return normalize(rows);
-}
+function parseCSV(text,delimiter='auto'){check(text);return normalize(require('./table-text.js').csv(text,delimiter));}
 function normalize(rows){
  if(!Array.isArray(rows)||rows.some(r=>!Array.isArray(r)))throw Error('表格必须是二维数组');
  let width=0;for(const row of rows)width=Math.max(width,row.length);
@@ -251,6 +230,8 @@ function parseJSONExact(text){
 }
 function importTable({text='',format:kind='csv',delimiter='auto',bytes}){
  check(text);
+ if(kind==='terminal'){const rows=require('./table-text.js').terminal(text);if(!rows)throw Error('未找到带分隔线的终端表格');return normalize(rows);}
+ if(kind==='auto'){const rows=require('./table-text.js').detect(text);return rows?normalize(rows):parseCSV(text,delimiter);}
  if(kind==='xlsx')return xlsxRead(new Uint8Array(bytes));
  if(kind==='json')return fromJSON(parseJSONExact(text));
  if(kind==='jsonl')return fromJSON(lines(text).filter(l=>l.trim()).map(l=>parseJSONExact(l)));

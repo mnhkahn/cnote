@@ -143,6 +143,39 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' lo
    await page.locator('#table-undo').click();assert.equal(await page.evaluate(()=>cnoteTools.state.rows[0][0]),'name');
    await page.screenshot({path:path.join('/tmp','cnote-local-csv-'+name+'.png')});
   });
+  await t.test('notes and CSV import or paste CSV, TSV and wrapped terminal tables',async()=>{
+   const terminal=require('node:fs').readFileSync(path.join(__dirname,'fixtures/terminal-table.txt'),'utf8');
+   const samples=[['name,value\n"<script>","x,y"',[['name','value'],['<script>','x,y']]],['name\tvalue\nfirst\t001',[['name','value'],['first','001']]],[terminal,require('../tools/table-text.js').detect(terminal)]];
+   const paste=async(selector,text,html='')=>page.locator(selector).first().evaluate((el,{text,html})=>{const data=new DataTransfer();data.setData('text/plain',text);if(html)data.setData('text/html',html);el.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));},{text,html});
+   for(const [text,expected] of samples){
+    await page.evaluate(()=>{cnoteTools.show(0);cnote.receive({type:'load',id:'paste-note',title:'Paste',html:'<p>Before</p>'});cnote.focusEditor();const r=document.createRange();r.selectNodeContents(document.getElementById('editor'));r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);});
+    await paste('#editor',text,'<pre>clipboard wrapper</pre>');
+    const result=await page.locator('#editor table').evaluate(table=>[...table.rows].map(r=>[...r.cells].map(c=>c.innerHTML.replace(/<br\s*\/?\s*>/gi,'\n')).map(s=>{const el=document.createElement('div');el.innerHTML=s;return el.textContent;})));
+    assert.deepEqual(result,expected);assert.equal(await page.locator('#editor script').count(),0);
+    await page.getByRole('button',{name:'撤销',exact:true}).click();assert.equal(await page.locator('#editor table').count(),0);
+    await page.evaluate(()=>cnoteTools.show(3));await page.locator('#table-import-format').selectOption('auto');await page.locator('#table-input').fill(text);await page.locator('#table-import').click();
+    await page.waitForFunction(expected=>JSON.stringify(cnoteTools.state.rows)===JSON.stringify(expected),expected);
+    await paste('#table-grid tbody input',text);
+    assert.deepEqual(await page.evaluate(()=>cnoteTools.state.rows[1].slice(0,2)),expected[0].slice(0,2));
+    await page.locator('#table-undo').click();assert.deepEqual(await page.evaluate(()=>cnoteTools.state.rows),expected);
+    await page.locator('#table-redo').click();assert.equal(await page.evaluate(()=>cnoteTools.state.rows.length),expected.length+1);
+   }
+   const beforeOffset=await page.evaluate(()=>cnoteTools.state.rows);
+   const wrapped=page.locator('#table-grid textarea[data-row="2"][data-column="3"]');
+   assert.equal(await wrapped.inputValue(),beforeOffset[2][3]);
+   await wrapped.fill(beforeOffset[2][3]+'\nextra line');await wrapped.blur();
+   assert.equal(await page.evaluate(()=>cnoteTools.state.rows[2][3]),beforeOffset[2][3]+'\nextra line');
+   await page.locator('#table-undo').click();assert.deepEqual(await page.evaluate(()=>cnoteTools.state.rows),beforeOffset);
+   await paste('#table-grid [data-row="1"][data-column="3"]','x\ty\nz\tw');
+   assert.deepEqual(await page.evaluate(()=>cnoteTools.state.rows[1]),[...beforeOffset[1].slice(0,3),'x','y']);
+   assert.deepEqual(await page.evaluate(()=>cnoteTools.state.rows[2].slice(3)),['z','w']);
+   await page.locator('#table-undo').click();assert.deepEqual(await page.evaluate(()=>cnoteTools.state.rows),beforeOffset);
+   await page.evaluate(()=>{cnoteTools.show(0);cnote.receive({type:'load',id:'plain-paste',title:'Plain',html:''});cnote.focusEditor();});
+   await paste('#editor','hello, world\nnormal prose');assert.equal(await page.locator('#editor table').count(),0);
+   await paste('#editor','a\tb\n1\t2','<table><tr><td>HTML formatting</td></tr></table>');
+   assert.equal(await page.locator('#editor table').textContent(),'HTML formatting');
+   await page.evaluate(()=>cnoteTools.show(3));
+  });
   await t.test('HTML import removes executable markup and exports local bytes',async()=>{
    await page.locator('#table-import-format').selectOption('html');await page.locator('#table-input').fill('<table><tr><th>x</th></tr><tr><td><img src="https://never.test/pixel.png" onerror="evil()">&lt;script&gt;evil()&lt;/script&gt;</td></tr></table>');await page.locator('#table-import').click();
    assert.equal(await page.evaluate(()=>cnoteTools.state.rows[1][0]),'<script>evil()</script>');assert.equal(await page.locator('#table-grid script').count(),0);

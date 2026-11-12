@@ -71,6 +71,20 @@ test('CSV handles quoted delimiters, escaped quotes, BOM, CRLF and embedded newl
  assert.deepEqual(c.parseCSV('a;b\n1;2'),[['a','b'],['1','2']]);
  assert.throws(()=>c.parseCSV('a,b\n"unclosed,c'));
 });
+test('terminal table restores Chinese display columns and wrapped cells',()=>{
+ const text=require('node:fs').readFileSync(require('node:path').join(__dirname,'fixtures/terminal-table.txt'),'utf8');
+ const parser=require('../tools/table-text.js'),rows=parser.detect(text);
+ assert.equal(rows.length,6);assert.deepEqual(rows[0],['类型','--type 值','说明','内容如何生成']);
+ assert.deepEqual(rows[1].slice(0,3),['普通作业','normal（默认）','可带作业链接 --link']);
+ assert.equal(rows[4][1],'arithmetic');assert(rows[4][3].includes('\narithmetic --format text --pretty'));
+ assert(rows[5][3].endsWith('长在平板「家长设置 → 预习要求」保存后由平板提交时写入'));
+ assert.deepEqual(c.importTable({text,format:'auto'}),rows);
+ assert.deepEqual(c.importTable({text,format:'terminal'}),rows);
+ assert.deepEqual(parser.detect(text.replace(/^  /gm,'&#x20; ').replace(/$/gm,'\\')),rows);
+ assert.deepEqual(parser.detect('a\tb\n1\t2'),[['a','b'],['1','2']]);
+ assert.deepEqual(parser.detect('a,b\n"<script>","x,y"'),[['a','b'],['<script>','x,y']]);
+ for(const plain of ['hello, world','one paragraph\nsecond paragraph','a,b\nc,d,e','a,b\n"unclosed'])assert.equal(parser.detect(plain),null);
+});
 test('table imports union object keys and safely handles prototype-looking headers',()=>{
  const rows=c.importTable({format:'json',text:'[{"__proto__":"safe","b":1},{"b":2,"c":3}]'});
  assert.deepEqual(rows,[['__proto__','b','c'],['safe','1',''],['','2','3']]);

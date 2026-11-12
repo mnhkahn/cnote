@@ -16,6 +16,33 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
    await page.setContent('<script>window.messages=[];window.ipc={postMessage:s=>messages.push(JSON.parse(s))};</script>'+html);
    await page.waitForFunction(()=>!!window.cnote);
    const receive=e=>page.evaluate(e=>cnote.receive(e),e);
+   await t.test('scroll range shrinks after deletion and ignores cached inactive notes',async()=>{
+    const scrollPage=await browser.newPage({viewport:{width:1000,height:740}});scrollPage.setDefaultTimeout(5000);
+    try{
+     await scrollPage.setContent('<script>window.ipc={postMessage:()=>{}};</script>'+html);
+     const load=(id,html)=>scrollPage.evaluate(({id,html})=>cnote.receive({type:'load',id,title:'Scroll test',html}),{id,html});
+     const height=()=>scrollPage.locator('main').evaluate(el=>el.scrollHeight);
+     await load('short-scroll','<p>Short note</p>');
+     await scrollPage.waitForFunction(()=>document.querySelector('.editor-stack').offsetHeight>=370);
+     const shortHeight=await height();
+     await load('long-scroll','<p>Long paragraph with enough text to wrap in a narrow window.</p>'.repeat(200));
+     await scrollPage.waitForFunction(()=>document.querySelector('main').scrollHeight>5000);
+     const longHeight=await height();
+     await scrollPage.locator('#editor').focus();await scrollPage.keyboard.press('Meta+A');await scrollPage.keyboard.press('Backspace');
+     await scrollPage.waitForFunction(limit=>document.querySelector('main').scrollHeight<=limit+2,shortHeight);
+     assert((await scrollPage.locator('main').evaluate(el=>el.scrollTop))<=shortHeight);
+     await scrollPage.getByRole('button',{name:'撤销',exact:true}).click();
+     await scrollPage.waitForFunction(limit=>document.querySelector('main').scrollHeight>=limit-2,longHeight);
+     await scrollPage.locator('main').evaluate(el=>{el.scrollTop=el.scrollHeight;});
+     await scrollPage.evaluate(()=>cnote.action('open',{id:'short-scroll'}));
+     await scrollPage.waitForFunction(limit=>document.querySelector('main').scrollHeight<=limit+2,shortHeight);
+     assert.equal(await scrollPage.locator('main').evaluate(el=>el.scrollTop),0);
+     await scrollPage.setViewportSize({width:600,height:500});
+     await scrollPage.waitForFunction(()=>document.querySelector('main').scrollHeight<1000);
+     await scrollPage.evaluate(()=>cnote.action('open',{id:'long-scroll'}));
+     await scrollPage.waitForFunction(()=>document.querySelector('main').scrollHeight>5000);
+    }finally{await scrollPage.close();}
+   });
    await t.test('offline empty state and safe title',async()=>{
     await receive({type:'load',id:'a',title:'<script>unsafe</script>',html:'<p>Hello</p>'});
     assert.equal(await page.locator('#title').textContent(),'<script>unsafe</script>');assert.equal(await page.locator('#title script').count(),0);
@@ -165,6 +192,39 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
    await t.test('checkbox state persists as HTML attribute',async()=>{
     await receive({type:'load',id:'b',title:'Tasks',html:'<div><input type="checkbox"><label>Do it</label></div>'});
     await page.locator('#editor input').check();await page.evaluate(()=>cnote.flush());const edit=await page.evaluate(()=>messages.filter(m=>m.type==='change').at(-1));assert(edit.html.includes('checked'));await receive({type:'saved',id:'b',seq:edit.seq});
+   });
+   await t.test('table dialog inserts at the saved caret and supports save and undo',async()=>{
+    const original='<p>Before</p><p>After</p>';
+    await receive({type:'load',id:'insert-table',title:'Insert table',html:original});
+    await page.locator('#editor').focus();
+    await page.evaluate(()=>{const r=document.createRange();r.setStartAfter(document.querySelector('#editor p'));r.collapse(true);getSelection().removeAllRanges();getSelection().addRange(r);});
+    await page.getByRole('button',{name:'插入表格',exact:true}).click();
+    await page.locator('#dialog-body input').nth(0).fill('2');
+    await page.locator('#dialog-body input').nth(1).fill('4');
+    await page.getByRole('button',{name:'插入',exact:true}).click();
+    assert.equal(await page.locator('#dialog').evaluate(el=>el.open),false);
+    assert.equal(await page.locator('#editor table tr').count(),2);
+    assert.equal(await page.locator('#editor table th').count(),4);
+    assert.equal(await page.locator('#editor table td').count(),4);
+    assert(await page.locator('#editor table').evaluate(el=>el.previousElementSibling?.textContent==='Before'&&el.nextElementSibling?.nextElementSibling?.textContent==='After'));
+    await page.evaluate(()=>cnote.flush());
+    const saved=await page.evaluate(()=>messages.filter(m=>m.type==='change'&&m.id==='insert-table').at(-1));
+    assert(saved.html.includes('<table>'));await receive({type:'saved',id:'insert-table',seq:saved.seq});
+    await page.getByRole('button',{name:'撤销',exact:true}).click();
+    assert.equal(await page.locator('#editor').innerHTML(),original);
+    await page.getByRole('button',{name:'插入表格',exact:true}).click();
+    await page.getByRole('button',{name:'取消',exact:true}).click();
+    assert.equal(await page.locator('#editor').innerHTML(),original);
+    await page.evaluate(()=>cnote.flush());
+    const undone=await page.evaluate(()=>messages.filter(m=>m.type==='change'&&m.id==='insert-table').at(-1));
+    await receive({type:'saved',id:'insert-table',seq:undone.seq});
+    await receive({type:'load',id:'empty-table',title:'Empty table',html:''});
+    await page.getByRole('button',{name:'插入表格',exact:true}).click();
+    await page.getByRole('button',{name:'插入',exact:true}).click();
+    assert.equal(await page.locator('#editor table tr').count(),3);
+    await page.evaluate(()=>cnote.flush());
+    const empty=await page.evaluate(()=>messages.filter(m=>m.type==='change'&&m.id==='empty-table').at(-1));
+    await receive({type:'saved',id:'empty-table',seq:empty.seq});
    });
    await t.test('table context menu adds and removes columns',async()=>{
     await receive({type:'load',id:'c',title:'Table',html:'<table><tr><td>A</td><td>B</td></tr></table>'});await page.locator('#editor td').first().click({button:'right'});await page.locator('#context button').filter({hasText:'在右侧插入列'}).click();assert.equal(await page.locator('#editor td').count(),3);
