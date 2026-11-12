@@ -50,3 +50,7 @@ pre.conflict-content{padding:0}
 
 .conflict-tail{flex:1;min-height:80px}.conflict-tail>div{border-right:1px solid var(--line)}
 .conflict-preview-toggle[open]{flex-shrink:0}
+
+#note-find{display:flex;gap:8px;align-items:center;width:100%;padding-top:6px}#note-find[hidden]{display:none}#note-find input{flex:1;min-width:80px;max-width:420px;border:1px solid var(--line);border-radius:5px;padding:6px;background:var(--bg);color:var(--ink)}#note-find span{color:var(--muted);font-size:12px;white-space:nowrap}.shortcut-help{max-height:65vh;overflow:auto;padding:2px 12px 2px 2px}.shortcut-help>div{display:flex;justify-content:space-between;gap:20px;padding:7px 0;border-bottom:1px solid var(--line)}.shortcut-help kbd{font-size:12px;opacity:1;white-space:nowrap}@media print{#note-find{display:none!important}}
+
+.note-find-mark{position:fixed;z-index:2;pointer-events:none;background:var(--active);opacity:.65;border-bottom:2px solid var(--accent)}body.tools-open #note-find-marks{display:none}@media print{#note-find-marks{display:none!important}}

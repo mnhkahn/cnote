@@ -224,12 +224,60 @@ static SEL editingSelector(NSEvent *event) {
     if ([key isEqualToString:@"c"]) return @selector(copy:);
     if ([key isEqualToString:@"v"]) return @selector(paste:);
     if ([key isEqualToString:@"x"]) return @selector(cut:);
+    if ([key isEqualToString:@"b"]) return @selector(toggleBoldface:);
+    if ([key isEqualToString:@"i"]) return @selector(toggleItalics:);
+    if ([key isEqualToString:@"u"]) return @selector(toggleUnderline:);
     return NULL;
 }
+static NSString *noteCommand(NSEvent *event) {
+    NSEventModifierFlags flags = event.modifierFlags;
+    if (event.type != NSEventTypeKeyDown || !(flags & NSEventModifierFlagCommand) || (flags & NSEventModifierFlagControl)) return nil;
+    NSString *key = event.charactersIgnoringModifiers.lowercaseString;
+    // Shift/Option can change the characters of number and punctuation keys.
+    switch (event.keyCode) {
+        case 18: key = @"1"; break; case 19: key = @"2"; break; case 20: key = @"3"; break;
+        case 29: key = @"0"; break; case 26: key = @"7"; break; case 28: key = @"8"; break; case 25: key = @"9"; break;
+        case 33: key = @"["; break; case 30: key = @"]"; break; case 42: key = @"\\"; break; case 44: key = @"/"; break;
+        case 17: if (flags & NSEventModifierFlagOption) key = @"t"; break;
+    }
+    NSString *chord = [NSString stringWithFormat:@"%@%@%@", flags & NSEventModifierFlagShift ? @"shift-" : @"", flags & NSEventModifierFlagOption ? @"alt-" : @"", key];
+    return @{@"b":@"bold", @"i":@"italic", @"u":@"underline", @"shift-x":@"strikeThrough",
+        @"e":@"inlineCode", @"shift-c":@"codeBlock", @"k":@"link", @"shift-k":@"unlink",
+        @"alt-0":@"paragraph", @"alt-1":@"heading1", @"alt-2":@"heading2", @"alt-3":@"heading3",
+        @"shift-7":@"insertOrderedList", @"shift-8":@"insertUnorderedList", @"shift-9":@"task", @"shift-b":@"quote",
+        @"[":@"outdent", @"]":@"indent", @"shift-\\":@"removeFormat",
+        @"shift-l":@"justifyLeft", @"shift-e":@"justifyCenter", @"shift-r":@"justifyRight", @"shift-j":@"justifyFull",
+        @"alt-t":@"table", @"shift-v":@"pastePlain", @"f":@"find", @"g":@"findNext", @"shift-g":@"findPrevious", @"p":@"print", @"/":@"shortcuts"}[chord];
+}
 static BOOL forwardEditingKey(NSEvent *event) {
+    NSString *note = noteCommand(event);
     SEL selector = editingSelector(event);
-    WKWebView *view = selector ? focusedWebView(event) : nil;
+    WKWebView *view = (selector || note) ? focusedWebView(event) : nil;
     if (!view) return NO;
+    if (note) {
+        // Wry does not deliver these Command equivalents to the DOM reliably.
+        // The editor checks focus, dialogs and workspace before formatting.
+        if ([note isEqualToString:@"pastePlain"]) {
+            NSString *text = [NSPasteboard.generalPasteboard stringForType:NSPasteboardTypeString] ?: @"";
+            NSData *data = [NSJSONSerialization dataWithJSONObject:@[text] options:0 error:nil];
+            NSString *args = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            NSString *script = [NSString stringWithFormat:@"!!(window.cnote&&cnote.pastePlain(...%@))", args];
+            [view evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+                if (!error && ![result boolValue]) [NSApp sendAction:@selector(pasteAsPlainText:) to:nil from:event];
+            }];
+            return YES;
+        }
+        NSString *script = [NSString stringWithFormat:@"!!(window.cnote&&cnote.formatShortcut('%@'))", note];
+        [view evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+            // Keep code-editor and text-field shortcuts working outside note content.
+            if (!error && ![result boolValue] && focusedWebView(event) == view) {
+                SEL equivalent = @selector(performKeyEquivalent:);
+                BOOL (*perform)(id, SEL, NSEvent *) = (void *)[WKWebView instanceMethodForSelector:equivalent];
+                if (!perform(view, equivalent, event)) [view.window.firstResponder keyDown:event];
+            }
+        }];
+        return YES;
+    }
     if (selector == @selector(selectAll:) || selector == @selector(undo:) || selector == @selector(redo:)) {
         NSString *command = selector == @selector(selectAll:) ? @"selectAll" : selector == @selector(undo:) ? @"undo" : @"redo";
         NSString *script = [NSString stringWithFormat:@"window.cnoteTools&&cnoteTools.workspace?cnoteTools.edit('%@'):document.execCommand('%@')", command, command];

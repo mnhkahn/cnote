@@ -9,7 +9,7 @@
  const notes=new Map(),pendingWrites=new Set();
  const warmups=new Map();let warmTimer=null,cacheGeneration=0,cacheAccount=null,lastInput=0,syncRequested=false;
  let countTimer=null,pruneTimer=null,scrollPosition=0;
- main.addEventListener('scroll',()=>{scrollPosition=main.scrollTop;if(active)active.scroll=scrollPosition;positionImageActions();},{passive:true});
+ main.addEventListener('scroll',()=>{scrollPosition=main.scrollTop;if(active)active.scroll=scrollPosition;positionImageActions();paintFind();},{passive:true});
  let composing=false,pendingLoad=null,dialogKind='',dialogQueue=[],pendingAction=null,pendingConflictResult=null;
  const post=data=>window.ipc.postMessage(JSON.stringify(data));
  const text=(tag,value)=>{const el=document.createElement(tag);el.textContent=value;return el;};
@@ -98,6 +98,7 @@
  }
  function activate(n){
   if(active===n)return;
+  closeFind(false);
   remember();clearImageSelection();if(active){active.scroll=scrollPosition;active.selection=selection;active.pane.classList.remove('active');active.pane.setAttribute('aria-hidden','true');}
   editor.removeAttribute('id');editor=n.node;editor.id='editor';active=n;id=n.id;selection=n.selection;
   n.pane.classList.add('active');n.pane.removeAttribute('aria-hidden');n.height=n.height||n.node.offsetHeight;stack.style.height=n.height+'px';
@@ -191,8 +192,100 @@
  onEditor('dblclick',e=>{if(e.target.tagName==='IMG'){e.preventDefault();selectImage(e.target);viewImage(e.target);}});
  for(const type of ['copy','cut'])onEditor(type,e=>{syncImageSelection();if(selectedImage){e.preventDefault();imageClipboard(type==='cut');}});
  function command(cmd,value){if(!id)return;restore();document.execCommand(cmd,false,value??null);remember();changed();}
+ const shortcuts=[
+  ['bold','加粗','b'],['italic','斜体','i'],['underline','下划线','u'],['strikeThrough','删除线','x',true],
+  ['inlineCode','行内代码','e'],['codeBlock','代码块','c',true],['link','插入或编辑链接','k'],['unlink','移除链接','k',true],
+  ['paragraph','正文','0',false,true],['heading1','一级标题','1',false,true],['heading2','二级标题','2',false,true],['heading3','三级标题','3',false,true],
+  ['insertOrderedList','有序列表','7',true],['insertUnorderedList','无序列表','8',true],['task','待办事项','9',true],['quote','引用','b',true],
+  ['outdent','减少缩进','['],['indent','增加缩进',']'],['removeFormat','清除格式','\\',true],
+  ['justifyLeft','左对齐','l',true],['justifyCenter','居中','e',true],['justifyRight','右对齐','r',true],['justifyFull','两端对齐','j',true],
+  ['table','插入表格','t',false,true],['pastePlain','粘贴为纯文本','v',true],
+  ['find','查找当前笔记','f'],['findNext','下一个匹配','g'],['findPrevious','上一个匹配','g',true],['print','打印','p'],['shortcuts','快捷键说明','/'],
+ ].map(([id,label,key,shift=false,alt=false])=>({id,label,key,shift,alt,display:'⌘'+(alt?'⌥':'')+(shift?'⇧':'')+key.toUpperCase()}));
+ let plainPaste=false,plainPasteTimer=null;
+ function noteFocused(){return active?.loaded&&!dialog.open&&!composing&&!window.cnoteTools?.workspace&&document.activeElement===editor&&editor.contains(getSelection()?.anchorNode);}
+ function closestBlock(){const node=getSelection()?.anchorNode;return (node?.nodeType===1?node:node?.parentElement)?.closest('h1,h2,h3,p,pre,blockquote');}
+ function block(tag){command('formatBlock',closestBlock()?.tagName.toLowerCase()===tag?'p':tag);}
+ function inlineCode(){
+  const node=getSelection()?.anchorNode,code=(node?.nodeType===1?node:node?.parentElement)?.closest('code');
+  if(code&&editor.contains(code)){const parent=code.parentElement,copy=parent.cloneNode(true),index=[...parent.childNodes].indexOf(code),plain=copy.childNodes[index];plain.replaceWith(...plain.childNodes);const r=document.createRange();if(parent===editor)r.selectNodeContents(parent);else r.selectNode(parent);selection=r;insert(parent===editor?copy.innerHTML:copy.outerHTML);}
+  else {const code=text('code',getSelection()?.toString().replace(/\n+$/,'')||'代码');insert(code.outerHTML);}
+ }
+ function linkDialog(){
+  remember();const node=selection?.startContainer,anchor=(node?.nodeType===1?node:node?.parentElement)?.closest('a');
+  if(anchor&&editor.contains(anchor)){const r=document.createRange();r.selectNodeContents(anchor);selection=r;}
+  const input=document.createElement('input');input.type='url';input.placeholder='https://example.com';input.setAttribute('aria-label','链接地址');input.value=anchor?.getAttribute('href')||'';
+  const linkRange=selection?.cloneRange(),error=text('p',''),apply=()=>{const url=input.value.trim();if(!safeURL(url)){error.textContent='请输入有效的 http、https 或 mailto 链接';input.focus();return false;}dialog.close();selection=linkRange?.cloneRange();if(selection&&!selection.collapsed)command('createLink',url);else{const a=text('a',url);a.href=url;insert(a.outerHTML);}};
+  modal('link','插入或编辑链接',[input,error],[cancel,['移除链接',()=>{dialog.close();selection=linkRange?.cloneRange();command('unlink');}],['保存',apply,'primary']]);
+  input.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();apply();}};input.focus();input.select();
+ }
+ function showShortcuts(){
+  remember();const list=document.createElement('div');list.className='shortcut-help';list.tabIndex=0;list.setAttribute('role','region');list.setAttribute('aria-label','快捷键列表');
+  const basics=[['撤销 / 重做','⌘Z / ⌘⇧Z'],['剪切 / 复制 / 粘贴 / 全选','⌘X / ⌘C / ⌘V / ⌘A'],['新建 / 保存笔记','⌘N / ⌘S'],['切换工作区','⌘1–⌘5'],['列表缩进 / 表格内移动','Tab / ⇧Tab'],['关闭查找 / 弹窗','Esc']];
+  for(const [label,key] of [...shortcuts.map(s=>[s.label,s.display]),...basics]){const row=document.createElement('div');row.append(text('span',label),text('kbd',key));list.append(row);}
+  modal('shortcuts','笔记快捷键',[list],[['关闭',()=>{}]]);
+ }
+ function formatShortcut(cmd){
+  if(!shortcuts.some(s=>s.id===cmd))return false;
+  if(cmd==='find'&&!findBar.hidden&&findBar.contains(document.activeElement)){findInput.focus();findInput.select();return true;}
+  if(['findNext','findPrevious'].includes(cmd)&&!findBar.hidden&&!dialog.open&&!window.cnoteTools?.workspace&&(noteFocused()||findBar.contains(document.activeElement))){findNote(cmd==='findNext'?1:-1);return true;}
+  if(!noteFocused())return false;
+  remember();
+  if(cmd==='inlineCode')inlineCode();else if(cmd==='codeBlock')block('pre');else if(cmd==='quote')block('blockquote');
+  else if(cmd==='paragraph')command('formatBlock','p');else if(/^heading[1-3]$/.test(cmd))block('h'+cmd.at(-1));
+  else if(cmd==='task')task();else if(cmd==='link')linkDialog();else if(cmd==='table')insertTableDialog();
+  else if(cmd==='find')openFind();else if(cmd==='findNext'||cmd==='findPrevious'){openFind();findNote(cmd==='findNext'?1:-1);}
+  else if(cmd==='shortcuts')showShortcuts();else if(cmd==='print')post({type:'print'});
+  else if(cmd==='pastePlain'){plainPaste=true;clearTimeout(plainPasteTimer);plainPasteTimer=setTimeout(()=>plainPaste=false,1000);}
+  else command(cmd);return true;
+ }
+ function pastePlain(value){if(!noteFocused())return false;if(!value)return true;remember();command('insertText',value);plainPaste=false;return true;}
+ function keyShortcut(e){
+  if(e.isComposing||!(e.metaKey||e.ctrlKey)||(e.metaKey&&e.ctrlKey))return false;
+  const key={BracketLeft:'[',BracketRight:']',Backslash:'\\',Slash:'/'}[e.code]||(/^Digit[0-9]$/.test(e.code)?e.code.slice(-1):e.altKey&&/^Key[A-Z]$/.test(e.code)?e.code.slice(-1).toLowerCase():e.key.toLowerCase());
+  const shortcut=shortcuts.find(s=>s.key===key&&s.shift===e.shiftKey&&s.alt===e.altKey);
+  if(!shortcut||!formatShortcut(shortcut.id))return false;
+  if(shortcut.id!=='pastePlain')e.preventDefault();return true;
+ }
  function insert(html){command('insertHTML',html);}
- function task(){insert('<div><input type="checkbox"><label>待办事项</label></div><p><br></p>');}
+ function task(){const label=text('label',getSelection()?.toString().trim()||'待办事项');insert('<div><input type="checkbox">'+label.outerHTML+'</div><p><br></p>');}
+ const findBar=document.createElement('div'),findInput=document.createElement('input'),findCount=text('span','0 / 0');
+ findBar.id='note-find';findBar.hidden=true;findInput.type='search';findInput.placeholder='查找当前笔记';findInput.setAttribute('aria-label','查找当前笔记');findCount.setAttribute('aria-live','polite');findBar.append(findInput,findCount);
+ const findMarks=document.createElement('div');findMarks.id='note-find-marks';document.body.append(findMarks);
+ let findIndex=-1,findQuery='',findRange=null;
+ for(const [label,handler] of [['上一个',()=>findNote(-1)],['下一个',()=>findNote(1)],['关闭查找',()=>closeFind(true)]]){const button=text('button',label);button.type='button';button.onclick=handler;findBar.append(button);}
+ document.querySelector('header').append(findBar);
+ function closeFind(focus){const range=findRange;findBar.hidden=true;findIndex=-1;findQuery='';findRange=null;findMarks.replaceChildren();if(focus){if(range&&editor.contains(range.startContainer))selection=range;restore();}}
+ function paintFind(){
+  findMarks.replaceChildren();if(findBar.hidden||!findRange||!editor.contains(findRange.startContainer))return;
+  const bounds=main.getBoundingClientRect();for(const rect of findRange.getClientRects()){const top=Math.max(rect.top,bounds.top),bottom=Math.min(rect.bottom,bounds.bottom);if(bottom<=top)continue;const mark=document.createElement('div');mark.className='note-find-mark';Object.assign(mark.style,{left:Math.max(rect.left,bounds.left)+'px',top:top+'px',width:Math.max(0,Math.min(rect.right,bounds.right)-Math.max(rect.left,bounds.left))+'px',height:bottom-top+'px'});findMarks.append(mark);}
+ }
+ window.addEventListener('resize',paintFind);
+ function openFind(){const selected=getSelection()?.toString();if(selected&&selected.length<=256)findInput.value=selected;findBar.hidden=false;findIndex=-1;findInput.focus();findInput.select();if(findInput.value)findNote(1);}
+ function findNote(direction){
+  const keepFocus=findBar.contains(document.activeElement),query=findInput.value;if(!query){findCount.textContent='0 / 0';findIndex=-1;findRange=null;paintFind();return;}
+  const nodes=[],walker=document.createTreeWalker(editor,NodeFilter.SHOW_TEXT);let value='',node;
+  while((node=walker.nextNode())){nodes.push({node,start:value.length,end:value.length+node.data.length});value+=node.data;}
+  const escaped=Array.from(query,char=>'^$\\.*+?()[]{}|'.includes(char)?'\\'+char:char).join(''),pattern=new RegExp(escaped,'giu'),matches=[...value.matchAll(pattern)];
+  if(!matches.length){findCount.textContent='0 / 0';findIndex=-1;findRange=null;paintFind();return;}
+  if(findQuery!==query||findIndex<0)findIndex=direction>0?0:matches.length-1;else findIndex=(findIndex+direction+matches.length)%matches.length;
+  findQuery=query;const match=matches[findIndex],start=nodes.find(n=>n.end>match.index),end=nodes.find(n=>n.end>=match.index+match[0].length),range=document.createRange();
+  range.setStart(start.node,match.index-start.start);range.setEnd(end.node,match.index+match[0].length-end.start);const s=getSelection();s.removeAllRanges();s.addRange(range);findRange=range.cloneRange();selection=range.cloneRange();if(keepFocus)findInput.focus({preventScroll:true});
+  start.node.parentElement.scrollIntoView({block:'center'});findCount.textContent=`${findIndex+1} / ${matches.length}`;paintFind();
+ }
+ findInput.oninput=()=>{findIndex=-1;findNote(1);};
+ findInput.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();findNote(e.shiftKey?-1:1);}};
+ document.addEventListener('keydown',e=>{if(e.defaultPrevented||e.isComposing)return;if(e.key==='Escape'&&!findBar.hidden){e.preventDefault();closeFind(true);return;}if(findBar.contains(e.target))keyShortcut(e);});
+ function tableTab(backwards){
+  const node=getSelection()?.anchorNode,cell=(node?.nodeType===1?node:node?.parentElement)?.closest('td,th');if(!cell||!editor.contains(cell))return false;
+  const table=cell.closest('table'),cells=[...table.rows].flatMap(row=>[...row.cells]),index=cells.indexOf(cell);let target=cells[index+(backwards?-1:1)];
+  if(!target&&!backwards){
+   const copy=table.cloneNode(true),width=[...table.rows[table.rows.length-1].cells].reduce((n,c)=>n+c.colSpan,0),row=copy.insertRow(-1);
+   for(let i=0;i<width;i++){const td=document.createElement('td');td.innerHTML='<br>';row.append(td);}
+   const parent=table.parentNode,index=[...parent.childNodes].indexOf(table),range=document.createRange();editor.blur();editor.focus();range.selectNode(table);selection=range;insert(copy.outerHTML);target=parent.childNodes[index]?.rows?.[copy.rows.length-1]?.cells[0];
+  }
+  if(!target)return false;editor.focus();const r=document.createRange();r.selectNodeContents(target);r.collapse(true);getSelection().removeAllRanges();getSelection().addRange(r);remember();return true;
+ }
  function modal(kind,heading,content,buttons){
   if(dialog.open){if(dialogKind===kind&&kind==='login')dialog.close();else{dialogQueue.push(()=>modal(kind,heading,content,buttons));return;}}
   dialogKind=kind;dialog.classList.toggle('conflict-dialog',kind==='conflict');dialog.classList.toggle('image-dialog',kind==='image');document.getElementById('dialog-title').textContent=heading;body.replaceChildren(...content);actions.replaceChildren();
@@ -315,17 +408,18 @@
   input.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();if(input.value.trim()){dialog.close();submit();}}};setTimeout(()=>input.focus(),0);
  }
  function deleteNote(targetId=id,targetTitle=title.textContent){if(!targetId)return;modal('delete','删除笔记',[text('p',`“${targetTitle}”将从本机和 OneDrive 移除。此操作无法在应用内撤销。`)],[cancel,['确认删除',()=>barrier(()=>{const n=notes.get(targetId);if(n)dispose(n);notes.delete(targetId);navigate('delete',{id:targetId});}),'danger']]);}
- const tools=[['type-bold','加粗','bold'],['type-italic','斜体','italic'],['type-underline','下划线','underline'],['type-strikethrough','删除线','strikeThrough'],['code-slash','代码',()=>{const s=getSelection()?.toString()||'代码';const code=text('code',s);insert(code.outerHTML);}],null,
-  [null,'一级标题',()=>command('formatBlock','h1'),'H1'],[null,'二级标题',()=>command('formatBlock','h2'),'H2'],[null,'三级标题',()=>command('formatBlock','h3'),'H3'],null,
-  ['list-ul','无序列表','insertUnorderedList'],['list-ol','有序列表','insertOrderedList'],['check2-square','待办事项',task],['table','插入表格',()=>{
+ function insertTableDialog(){
    remember();const rows=document.createElement('input'),cols=document.createElement('input');rows.type=cols.type='number';rows.min=cols.min='1';rows.max=cols.max='30';rows.value='3';cols.value='3';
    modal('table','插入表格',[text('p','行数 / 列数（1–30）'),rows,cols],[cancel,['插入',()=>{const r=Math.min(30,Math.max(1,Number(rows.value)||3)),c=Math.min(30,Math.max(1,Number(cols.value)||3));let h='<table><tbody>';for(let i=0;i<r;i++){h+='<tr>';for(let j=0;j<c;j++)h+=i===0?'<th>标题</th>':'<td><br></td>';h+='</tr>';}
     // A modal makes the editor inert; close it before restoring the caret and editing.
     dialog.close();insert(h+'</tbody></table><p><br></p>');
    },'primary']]);
-  }],null,['unindent','减少缩进','outdent'],['indent','增加缩进','indent'],['arrow-counterclockwise','撤销','undo'],['arrow-clockwise','重做','redo'],['eraser','清除格式','removeFormat']];
+ }
+ const tools=[['type-bold','加粗','bold'],['type-italic','斜体','italic'],['type-underline','下划线','underline'],['type-strikethrough','删除线','strikeThrough'],['code-slash','代码',inlineCode],null,
+  [null,'一级标题',()=>command('formatBlock','h1'),'H1'],[null,'二级标题',()=>command('formatBlock','h2'),'H2'],[null,'三级标题',()=>command('formatBlock','h3'),'H3'],null,
+  ['list-ul','无序列表','insertUnorderedList'],['list-ol','有序列表','insertOrderedList'],['check2-square','待办事项',task],['table','插入表格',insertTableDialog],null,['unindent','减少缩进','outdent'],['indent','增加缩进','indent'],['arrow-counterclockwise','撤销','undo'],['arrow-clockwise','重做','redo'],['eraser','清除格式','removeFormat'],null,[null,'插入或编辑链接',linkDialog,'链接'],[null,'查找当前笔记',openFind,'查找'],[null,'快捷键说明',showShortcuts,'?']];
  const toolbar=document.getElementById('toolbar');
- for(const tool of tools){if(!tool){const s=document.createElement('span');s.className='separator';toolbar.append(s);continue;}const [icon,label,cmd,caption]=tool,b=document.createElement('button');b.title=label;b.setAttribute('aria-label',label);if(icon){const i=document.createElement('i');i.className=`bi bi-${icon}`;b.append(i);}else b.textContent=caption;b.onmousedown=e=>{e.preventDefault();remember();};b.onclick=()=>typeof cmd==='function'?cmd():command(cmd);toolbar.append(b);}
+ for(const tool of tools){if(!tool){const s=document.createElement('span');s.className='separator';toolbar.append(s);continue;}const [icon,label,cmd,caption]=tool,b=document.createElement('button');b.title=label;b.setAttribute('aria-label',label);const shortcut=shortcuts.find(s=>s.id===cmd||s.label===label||(label==='代码'&&s.id==='inlineCode'));if(shortcut){b.title+=`（${shortcut.display}）`;const modifiers=(shortcut.alt?'Alt+':'')+(shortcut.shift?'Shift+':'');b.setAttribute('aria-keyshortcuts',`Meta+${modifiers}${shortcut.key.toUpperCase()} Control+${modifiers}${shortcut.key.toUpperCase()}`);}if(icon){const i=document.createElement('i');i.className=`bi bi-${icon}`;b.append(i);}else b.textContent=caption;b.onmousedown=e=>{e.preventDefault();remember();};b.onclick=()=>typeof cmd==='function'?cmd():command(cmd);toolbar.append(b);}
  document.getElementById('save').onclick=()=>action('save');
  document.getElementById('print').onclick=()=>{if(id)post({type:'print'});};
  document.getElementById('export').onclick=()=>{const n=active;if(n)setTimeout(()=>post({type:'export',id:n.id,title:n.title,html:n.node.innerHTML}),0);};
@@ -338,11 +432,12 @@
  onEditor('click',e=>{if(e.target.tagName==='IMG'){e.preventDefault();return;}const a=e.target.closest('a');if(a){e.preventDefault();if(safeURL(a.href))post({type:'link',url:a.href});}});
  onEditor('keydown',e=>{
   if(e.isComposing)return;
+  if(keyShortcut(e))return;
   syncImageSelection();
   if(selectedImage&&e.key==='Enter'){e.preventDefault();viewImage();return;}
   if(selectedImage&&['Backspace','Delete'].includes(e.key)){e.preventDefault();if(!imagePending)removeImage();return;}
   if(e.key==='Escape'&&selectedImage){e.preventDefault();getSelection().collapseToEnd();remember();clearImageSelection();return;}
-  if(e.key==='Tab'){const node=getSelection()?.anchorNode;const el=node?.nodeType===1?node:node?.parentElement;if(el?.closest('li')){e.preventDefault();command(e.shiftKey?'outdent':'indent');}return;}
+  if(e.key==='Tab'){if(tableTab(e.shiftKey)){e.preventDefault();return;}const node=getSelection()?.anchorNode;const el=node?.nodeType===1?node:node?.parentElement;if(el?.closest('li')){e.preventDefault();command(e.shiftKey?'outdent':'indent');}return;}
   if(e.key!==' ')return;
   const s=getSelection();if(!s?.isCollapsed||!s.rangeCount||s.anchorNode.nodeType!==3)return;
   const node=s.anchorNode,offset=s.anchorOffset,prefix=node.textContent.slice(0,offset);
@@ -376,6 +471,7 @@
  }
  onEditor('paste',e=>{
   const clipboard=e.clipboardData;if(!clipboard)return;e.preventDefault();remember();
+  if(plainPaste){plainPaste=false;clearTimeout(plainPasteTimer);command('insertText',clipboard.getData('text/plain'));return;}
   const image=[...clipboard.items].find(i=>i.type.startsWith('image/'));
   if(image){const file=image.getAsFile();if(!file||file.size>8*1024*1024){receive({type:'error',message:'图片最大支持 8 MB，请缩小后重试。'});return;}const target=id;const reader=new FileReader();reader.onload=()=>{if(target!==id)return;const img=document.createElement('img');img.src=reader.result;img.alt='粘贴的图片';insert(img.outerHTML);};reader.readAsDataURL(file);return;}
   const html=clipboard.getData('text/html'),plain=clipboard.getData('text/plain');
@@ -403,7 +499,7 @@
   menu.hidden=false;menu.style.left=Math.max(0,Math.min(e.clientX,innerWidth-menu.offsetWidth-8))+'px';menu.style.top=Math.max(0,Math.min(e.clientY,innerHeight-menu.offsetHeight-8))+'px';
  });
  document.addEventListener('mousedown',e=>{if(!menu.contains(e.target))menu.hidden=true;});
- document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&!e.isComposing){if(e.key.toLowerCase()==='s'){e.preventDefault();if(window.cnoteTools?.workspace)window.cnoteTools.flush();else action('save');}if(e.key.toLowerCase()==='n'){e.preventDefault();action('new');}if(e.key.toLowerCase()==='q'){e.preventDefault();action('close');}if(e.key==='\\'){e.preventDefault();post({type:'sidebar'});}}});
+ document.addEventListener('keydown',e=>{if(!e.defaultPrevented&&(e.metaKey||e.ctrlKey)&&!e.isComposing&&!e.altKey&&!e.shiftKey){if(e.key.toLowerCase()==='s'){e.preventDefault();if(window.cnoteTools?.workspace)window.cnoteTools.flush();else action('save');}if(e.key.toLowerCase()==='n'){e.preventDefault();action('new');}if(e.key.toLowerCase()==='q'){e.preventDefault();action('close');}if(e.key==='\\'){e.preventDefault();post({type:'sidebar'});}}});
  function action(type,data={}){
   if(composing){editor.blur();composing=false;}
   switch(type){
@@ -480,5 +576,5 @@
    }
   }
  }
- window.cnote={action,receive,flush,sanitize,focusEditor:restore};post({type:'ready'});
+ window.cnote={action,receive,flush,sanitize,formatShortcut,pastePlain,shortcuts,focusEditor:restore};post({type:'ready'});
 })();

@@ -16,6 +16,35 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
    await page.setContent('<script>window.messages=[];window.ipc={postMessage:s=>messages.push(JSON.parse(s))};</script>'+html);
    await page.waitForFunction(()=>!!window.cnote);
    const receive=e=>page.evaluate(e=>cnote.receive(e),e);
+   await t.test('format shortcuts toggle selections, format new typing, save and respect focus',async()=>{
+    const formatPage=await browser.newPage();
+    try{
+     await formatPage.setContent('<script>window.messages=[];window.ipc={postMessage:s=>messages.push(JSON.parse(s))};</script>'+html);
+     for(const [key,cmd] of [['b','bold'],['i','italic'],['u','underline']]){
+      await formatPage.evaluate(key=>{cnote.receive({type:'load',id:'format-'+key,title:'Format',html:'<p>Format me</p>'});cnote.focusEditor();const r=document.createRange();r.selectNodeContents(document.getElementById('editor'));getSelection().removeAllRanges();getSelection().addRange(r);},key);
+      const state=()=>formatPage.evaluate(cmd=>document.queryCommandState(cmd),cmd);
+      await formatPage.keyboard.press('Meta+'+key);assert.equal(await state(),true);
+      await formatPage.evaluate(()=>cnote.flush());
+      const saved=await formatPage.evaluate(()=>messages.filter(m=>m.type==='change').at(-1));assert.notEqual(saved.html,'<p>Format me</p>');assert.equal(saved.id,'format-'+key);
+      await formatPage.getByRole('button',{name:'撤销',exact:true}).click();assert.equal(await state(),false);
+      await formatPage.getByRole('button',{name:'重做',exact:true}).click();assert.equal(await state(),true);
+      await formatPage.keyboard.press('Meta+'+key);assert.equal(await state(),false);
+      await formatPage.evaluate(()=>getSelection().collapseToEnd());
+      await formatPage.keyboard.press('Meta+'+key);await formatPage.keyboard.type(' extra');assert.equal(await state(),true);
+      await formatPage.keyboard.press('Meta+'+key);await formatPage.keyboard.type(' plain');assert.equal(await state(),false);
+      assert.equal((await formatPage.locator('#editor').textContent()).replaceAll('\u00a0',' '),'Format me extra plain');
+      await formatPage.evaluate(()=>cnote.flush());assert((await formatPage.evaluate(()=>messages.filter(m=>m.type==='change').at(-1).html)).includes('extra'));
+     }
+     const before=await formatPage.locator('#editor').innerHTML();
+     await formatPage.evaluate(()=>cnote.action('new'));
+     assert.equal(await formatPage.evaluate(()=>cnote.formatShortcut('bold')),false);
+     await formatPage.getByPlaceholder('给笔记起个名字').fill('Dialog text');await formatPage.keyboard.press('Meta+b');
+     assert.equal(await formatPage.locator('#editor').innerHTML(),before);
+     await formatPage.getByRole('button',{name:'取消',exact:true}).click();
+     await formatPage.evaluate(()=>cnoteTools.show(1));assert.equal(await formatPage.evaluate(()=>cnote.formatShortcut('bold')),false);
+     assert.equal(await formatPage.locator('#editor').innerHTML(),before);
+    }finally{await formatPage.close();}
+   });
    await t.test('scroll range shrinks after deletion and ignores cached inactive notes',async()=>{
     const scrollPage=await browser.newPage({viewport:{width:1000,height:740}});scrollPage.setDefaultTimeout(5000);
     try{
