@@ -230,8 +230,7 @@ function parseJSONExact(text){
 }
 function importTable({text='',format:kind='csv',delimiter='auto',bytes}){
  check(text);
- if(kind==='terminal'){const rows=require('./table-text.js').terminal(text);if(!rows)throw Error('未找到带分隔线的终端表格');return normalize(rows);}
- if(kind==='auto'){const rows=require('./table-text.js').detect(text);return rows?normalize(rows):parseCSV(text,delimiter);}
+ if(kind==='auto'){const rows=require('./table-text.js').detect(text);if(!rows)throw Error('未识别为 CSV / TSV，请检查格式或手动选择导入格式');return normalize(rows);}
  if(kind==='xlsx')return xlsxRead(new Uint8Array(bytes));
  if(kind==='json')return fromJSON(parseJSONExact(text));
  if(kind==='jsonl')return fromJSON(lines(text).filter(l=>l.trim()).map(l=>parseJSONExact(l)));
@@ -240,6 +239,7 @@ function importTable({text='',format:kind='csv',delimiter='auto',bytes}){
   const rows=lines(text).filter(l=>l.trim()).map(l=>l.trim().replace(/^\||\|$/g,'').split(/(?<!\\)\|/).map(c=>c.trim().replaceAll('\\|','|').replaceAll('<br>','\n')));
   if(rows[1]?.every(c=>/^:?-+:?$/.test(c)))rows.splice(1,1);return normalize(rows);
  }
+ if(kind!=='csv'&&kind!=='tsv')throw Error('不支持的表格导入格式');
  return parseCSV(text,delimiter);
 }
 function exportTable({rows,format:kind='csv',table='data'}){

@@ -143,9 +143,8 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' lo
    await page.locator('#table-undo').click();assert.equal(await page.evaluate(()=>cnoteTools.state.rows[0][0]),'name');
    await page.screenshot({path:path.join('/tmp','cnote-local-csv-'+name+'.png')});
   });
-  await t.test('notes and CSV import or paste CSV, TSV and wrapped terminal tables',async()=>{
-   const terminal=require('node:fs').readFileSync(path.join(__dirname,'fixtures/terminal-table.txt'),'utf8');
-   const samples=[['name,value\n"<script>","x,y"',[['name','value'],['<script>','x,y']]],['name\tvalue\nfirst\t001',[['name','value'],['first','001']]],[terminal,require('../tools/table-text.js').detect(terminal)]];
+  await t.test('notes and CSV import or paste CSV and TSV',async()=>{
+   const samples=[['name,value\n"<script>","x,y"',[['name','value'],['<script>','x,y']]],['name\tvalue\nfirst\t001',[['name','value'],['first','001']]],['type,value,info,details\na,b,c,"line1\nline2"\nd,e,f,"more\nlines"',[['type','value','info','details'],['a','b','c','line1\nline2'],['d','e','f','more\nlines']]]];
    const paste=async(selector,text,html='')=>page.locator(selector).first().evaluate((el,{text,html})=>{const data=new DataTransfer();data.setData('text/plain',text);if(html)data.setData('text/html',html);el.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));},{text,html});
    for(const [text,expected] of samples){
     await page.evaluate(()=>{cnoteTools.show(0);cnote.receive({type:'load',id:'paste-note',title:'Paste',html:'<p>Before</p>'});cnote.focusEditor();const r=document.createRange();r.selectNodeContents(document.getElementById('editor'));r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);});
@@ -174,6 +173,48 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' lo
    await paste('#editor','hello, world\nnormal prose');assert.equal(await page.locator('#editor table').count(),0);
    await paste('#editor','a\tb\n1\t2','<table><tr><td>HTML formatting</td></tr></table>');
    assert.equal(await page.locator('#editor table').textContent(),'HTML formatting');
+   await page.evaluate(()=>cnoteTools.show(3));
+  });
+  await t.test('terminal text stays text in notes and is rejected by CSV auto import',async()=>{
+   const text=require('node:fs').readFileSync(path.join(__dirname,'fixtures/unsupported-terminal-table.txt'),'utf8');
+   await page.evaluate(text=>{cnoteTools.show(0);cnote.receive({type:'load',id:'terminal-as-text',title:'Text',html:''});cnote.focusEditor();const data=new DataTransfer();data.setData('text/plain',text);document.getElementById('editor').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));},text);
+   assert.equal(await page.locator('#editor table').count(),0);
+   assert.equal((await page.locator('#editor').innerText()).replace(/\s+/g,' ').trim(),text.replace(/\s+/g,' ').trim());
+   await page.evaluate(()=>cnoteTools.show(3));
+   assert.equal(await page.locator('#table-import-format option[value="terminal"]').count(),0);
+   const before=await page.evaluate(()=>cnoteTools.state.rows);
+   await page.locator('#table-import-format').selectOption('auto');await page.locator('#table-input').fill(text);await page.locator('#table-import').click();
+   await page.waitForFunction(()=>document.getElementById('tool-status').dataset.error==='true');
+   assert.deepEqual(await page.evaluate(()=>cnoteTools.state.rows),before);
+   assert.equal(await page.locator('#table-input').inputValue(),text);
+  });
+  await t.test('pasting in a note table fills existing cells, expands and undoes without nesting',async()=>{
+   const samples=[{plain:'x,y\nz,w'}, {plain:'x\ty\nz\tw'}, {plain:'fallback',html:'<table><tr><th><b>x</b></th><th>y</th></tr><tr><td>z<br>line</td><td>w</td></tr></table>'}];
+   const original='<p>Before</p><table><tbody><tr><th>A</th><th>B</th></tr><tr><td>Keep</td><td>Replace</td></tr></tbody></table><p>After</p>';
+   for(const [index,sample] of samples.entries()){
+    await page.evaluate(({index,original})=>{cnoteTools.show(0);cnote.receive({type:'load',id:'paste-existing-'+index,title:'Existing table',html:original});cnote.focusEditor();const cell=document.querySelector('#editor td:last-child'),r=document.createRange();r.selectNodeContents(cell);r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);}, {index,original});
+    await page.locator('#editor').evaluate((el,sample)=>{const data=new DataTransfer();data.setData('text/plain',sample.plain);if(sample.html)data.setData('text/html',sample.html);el.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));},sample);
+    assert.equal(await page.locator('#editor table').count(),1);
+    const rows=await page.locator('#editor table').evaluate(table=>[...table.rows].map(r=>[...r.cells].map(c=>c.textContent)));
+    assert.equal(rows[0][0],'A');assert.equal(rows[0][1],'B');assert.equal(rows[1][0],'Keep');assert.equal(rows[1][1],'x');
+    assert.equal(rows.length,3);assert.equal(rows[0].length,3);
+    assert.equal(await page.locator('#editor > p').first().textContent(),'Before');assert.equal(await page.locator('#editor > p').last().textContent(),'After');
+    if(sample.html)assert.equal(await page.locator('#editor td b').textContent(),'x');
+    const after=await page.locator('#editor').innerHTML();
+    await page.evaluate(()=>cnote.flush());
+    const saved=await page.evaluate(()=>messages.filter(m=>m.type==='change'&&m.id.startsWith('paste-existing-')).at(-1));assert.equal(saved.html,after);
+    assert(await page.evaluate(()=>{const node=getSelection().anchorNode;return !!(node.nodeType===1?node:node.parentElement).closest('td,th');}));
+    await page.getByRole('button',{name:'撤销',exact:true}).click();assert.equal(await page.locator('#editor').innerHTML(),original);
+    await page.getByRole('button',{name:'重做',exact:true}).click();assert.equal(await page.locator('#editor').innerHTML(),after);
+   }
+   for(const [index,table] of ['<table><tfoot><tr><td>Footer</td></tr></tfoot></table>','<table><tr><td colspan="2">Merged</td></tr></table>'].entries()){
+    await page.evaluate(({index,table})=>{cnote.receive({type:'load',id:'special-table-'+index,title:'Table',html:table});cnote.focusEditor();const r=document.createRange();r.selectNodeContents(document.querySelector('#editor td'));r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);const data=new DataTransfer();data.setData('text/plain','x\ty\nz\tw');document.getElementById('editor').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));},{index,table});
+    assert.equal(await page.locator('#editor table').count(),1);
+    if(index===0){assert.equal(await page.locator('#editor tr').count(),2);assert.equal(await page.locator('#editor td').first().textContent(),'x');}
+    else assert.equal(await page.locator('#editor td').getAttribute('colspan'),'2');
+    await page.getByRole('button',{name:'撤销',exact:true}).click();
+    assert.equal(await page.locator('#editor td').first().textContent(),index===0?'Footer':'Merged');
+   }
    await page.evaluate(()=>cnoteTools.show(3));
   });
   await t.test('HTML import removes executable markup and exports local bytes',async()=>{

@@ -226,7 +226,7 @@
  $('table-input').oninput=()=>{state.tableInput=$('table-input').value;markDirty();};
  $('table-open-file').onclick=()=>$('table-file').click();
  $('table-import').onclick=()=>importData($('table-input').value,$('table-import-format').value);
- $('table-file').onchange=async event=>{const file=event.target.files[0];if(!file)return;if(file.size>MAX){status('文件最大支持 20 MB',true);return;}const extension=file.name.split('.').at(-1).toLowerCase(),format={xlsx:'xlsx',json:'json',jsonl:'jsonl',ndjson:'jsonl',md:'markdown',html:'html',htm:'html',sql:'sql'}[extension]||'auto';if(format==='xlsx')await importData('',format,await file.arrayBuffer());else await importData(await file.text(),format);event.target.value='';};
+ $('table-file').onchange=async event=>{const file=event.target.files[0];if(!file)return;if(file.size>MAX){status('文件最大支持 20 MB',true);return;}const extension=file.name.split('.').at(-1).toLowerCase(),format={csv:'csv',tsv:'csv',xlsx:'xlsx',json:'json',jsonl:'jsonl',ndjson:'jsonl',md:'markdown',html:'html',htm:'html',sql:'sql'}[extension]||'auto';if(format==='xlsx')await importData('',format,await file.arrayBuffer());else await importData(await file.text(),format);event.target.value='';};
  $('table-copy').onclick=()=>exportData(true);$('table-export').onclick=()=>exportData();$('table-print').onclick=printTable;
  $('table-undo').onclick=()=>{const change=history.pop();if(change){future.push(change);state.rows=change.before;markDirty();renderTable();}};
  $('table-redo').onclick=()=>{const change=future.pop();if(change){history.push(change);state.rows=change.after;markDirty();renderTable();}};

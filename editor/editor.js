@@ -350,20 +350,47 @@
   if(!patterns[prefix]&&!['[]','[ ]','- [ ]'].includes(prefix))return;
   e.preventDefault();const r=s.getRangeAt(0);r.setStart(node,0);r.setEnd(node,offset);s.removeAllRanges();s.addRange(r);document.execCommand('delete');selection=null;remember();if(patterns[prefix])command(...patterns[prefix]);else task();
  });
+ function pasteTable(source){
+  const node=selection?.startContainer,cell=(node?.nodeType===Node.ELEMENT_NODE?node:node?.parentElement)?.closest('td,th');
+  if(!cell||!editor.contains(cell))return false;
+  const table=cell.closest('table'),copy=table.cloneNode(true),startRow=cell.parentElement.rowIndex,startCol=cell.cellIndex;
+  const incoming=[...source.rows].map(row=>[...row.cells].map(cell=>{
+   const copy=cell.cloneNode(true);for(const nested of copy.querySelectorAll('table'))nested.replaceWith(document.createTextNode(nested.textContent));return copy.innerHTML;
+  }));
+  if(!incoming.length)return true;
+  // Preserve merged layouts rather than distributing values into ambiguous cell positions.
+  if([...table.rows].some(row=>[...row.cells].some(cell=>cell.colSpan!==1||cell.rowSpan!==1))){
+   command('insertText',incoming.map(row=>row.map(html=>{const node=document.createElement('div');node.innerHTML=html;for(const br of node.querySelectorAll('br'))br.replaceWith('\n');return node.textContent;}).join('\t')).join('\n'));return true;
+  }
+  let width=0;for(const row of copy.rows)width=Math.max(width,row.cells.length);for(const row of incoming)width=Math.max(width,startCol+row.length);
+  const height=Math.max(copy.rows.length,startRow+incoming.length);
+  if(width>2048||height>200000||width*height>2000000){receive({type:'error',message:'表格最多 20 万行、2048 列、200 万个单元格'});return true;}
+  while(copy.rows.length<height)copy.insertRow(-1);
+  for(const row of copy.rows)while(row.cells.length<width){const cell=document.createElement(row.parentElement.tagName==='THEAD'?'th':'td');cell.innerHTML='<br>';row.append(cell);}
+  for(const [y,row] of incoming.entries())for(const [x,html] of row.entries())copy.rows[startRow+y].cells[startCol+x].innerHTML=html||'<br>';
+  // Replace the enclosing table as one native edit, preserving undo/redo.
+  const parent=table.parentNode,index=[...parent.childNodes].indexOf(table),range=document.createRange();range.selectNode(table);selection=range;
+  insert(copy.outerHTML);
+  const inserted=parent.childNodes[index];if(inserted?.tagName==='TABLE'){const target=inserted.rows[startRow+incoming.length-1]?.cells[startCol+(incoming.at(-1)?.length||1)-1];if(target){const range=document.createRange();range.selectNodeContents(target);range.collapse(false);const s=getSelection();s.removeAllRanges();s.addRange(range);remember();}}
+  return true;
+ }
  onEditor('paste',e=>{
   const clipboard=e.clipboardData;if(!clipboard)return;e.preventDefault();remember();
   const image=[...clipboard.items].find(i=>i.type.startsWith('image/'));
   if(image){const file=image.getAsFile();if(!file||file.size>8*1024*1024){receive({type:'error',message:'图片最大支持 8 MB，请缩小后重试。'});return;}const target=id;const reader=new FileReader();reader.onload=()=>{if(target!==id)return;const img=document.createElement('img');img.src=reader.result;img.alt='粘贴的图片';insert(img.outerHTML);};reader.readAsDataURL(file);return;}
   const html=clipboard.getData('text/html'),plain=clipboard.getData('text/plain');
   // Real HTML tables preserve formatting; terminal apps often supply only a <pre> wrapper.
-  const safe=html?sanitize(html):'',rows=/<table[\s>]/i.test(safe)?null:window.cnoteTableText.detect(plain);
+  const safe=html?sanitize(html):'',template=document.createElement('template');if(safe)template.innerHTML=safe;
+  const source=template.content.querySelector('table'),rows=source?null:window.cnoteTableText.detect(plain);
+  if(source&&pasteTable(source))return;
   if(rows){const table=document.createElement('table'),tbody=document.createElement('tbody');
-   for(const [i,row] of rows.entries()){const tr=document.createElement('tr');for(const value of row){const cell=document.createElement(i?'td':'th');const lines=value.split('\n');for(const [j,line] of lines.entries()){if(j)cell.append(document.createElement('br'));cell.append(document.createTextNode(line));}if(!value)cell.append(document.createElement('br'));tr.append(cell);}tbody.append(tr);}table.append(tbody);insert(table.outerHTML+'<p><br></p>');
+   for(const [i,row] of rows.entries()){const tr=document.createElement('tr');for(const value of row){const cell=document.createElement(i?'td':'th');const lines=value.split('\n');for(const [j,line] of lines.entries()){if(j)cell.append(document.createElement('br'));cell.append(document.createTextNode(line));}if(!value)cell.append(document.createElement('br'));tr.append(cell);}tbody.append(tr);}table.append(tbody);if(!pasteTable(table))insert(table.outerHTML+'<p><br></p>');
   }else if(html)insert(safe);else if(safeURL(plain.trim())){const a=text('a',plain.trim());a.href=plain.trim();insert(a.outerHTML);}else command('insertText',plain);
  });
  const menu=document.getElementById('context');
- const tableActions=[['在上方插入行','row-before'],['在下方插入行','row-after'],['在左侧插入列','col-before'],['在右侧插入列','col-after'],['删除行','delete-row'],['删除列','delete-col']];
+ const tableActions=[['在上方插入行','row-before'],['在下方插入行','row-after'],['在左侧插入列','col-before'],['在右侧插入列','col-after'],['删除行','delete-row'],['删除列','delete-col'],['删除表格','delete-table']];
  function tableAction(op){const cell=contextCell;if(!cell)return;const row=cell.parentElement,table=cell.closest('table'),index=cell.cellIndex;
+  if(op==='delete-table'){if(!table||!editor.contains(table))return;const range=document.createRange();range.selectNode(table);selection=range;command('delete');contextCell=null;menu.hidden=true;return;}
   if(op.startsWith('row')){const next=document.createElement('tr');for(let i=0;i<row.cells.length;i++){const td=document.createElement('td');td.innerHTML='<br>';next.append(td);}if(op==='row-before')row.before(next);else row.after(next);}
   else if(op==='delete-row')row.remove();else for(const r of [...table.rows]){if(op==='delete-col')r.cells[index]?.remove();else{const td=document.createElement(r.parentElement.tagName==='THEAD'?'th':'td');td.innerHTML='<br>';r.insertBefore(td,r.cells[index+(op==='col-after'?1:0)]||null);}}
   if(!table.rows.length||![...table.rows].some(r=>r.cells.length))table.remove();menu.hidden=true;changed();
