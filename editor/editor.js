@@ -7,6 +7,7 @@
  const dialog=document.getElementById('dialog'), body=document.getElementById('dialog-body'), actions=document.getElementById('dialog-actions');
  let id='',active=null,serial=0,intent=0,selection=null,contextCell=null,selectedImage=null,imageRequest=0,imagePending=null;
  const notes=new Map(),pendingWrites=new Set();
+ const pastedLinks=new Map();let linkToken=0;
  const warmups=new Map();let warmTimer=null,cacheGeneration=0,cacheAccount=null,lastInput=0,syncRequested=false;
  let countTimer=null,pruneTimer=null,scrollPosition=0;
  main.addEventListener('scroll',()=>{scrollPosition=main.scrollTop;if(active)active.scroll=scrollPosition;positionImageActions();paintFind();},{passive:true});
@@ -50,7 +51,7 @@
   document.getElementById('count').textContent=active.count;
  }
  function deferCount(){clearTimeout(countTimer);countTimer=setTimeout(count,300);}
- function dispose(n){clearTimeout(n.timer);n.observer.disconnect();n.pane.remove();}
+ function dispose(n){clearTimeout(n.timer);n.observer.disconnect();n.pane.remove();for(const [token,request]of pastedLinks)if(request.note===n)pastedLinks.delete(token);}
  function resetCache(generation,account){
   if(generation<cacheGeneration)return;
   if(generation===cacheGeneration&&account===cacheAccount)return;
@@ -106,6 +107,7 @@
   document.getElementById('document').hidden=false;document.getElementById('empty').style.display='none';
   document.getElementById('count').textContent=n.count;
   if(scrollPosition!==n.scroll){main.scrollTop=n.scroll;scrollPosition=n.scroll;}deferCount();prune();
+  if(pastedLinks.size)setTimeout(applyLinkTitles,0);
  }
  function changed(){
   if(!active?.loaded)return;
@@ -469,12 +471,48 @@
   const inserted=parent.childNodes[index];if(inserted?.tagName==='TABLE'){const target=inserted.rows[startRow+incoming.length-1]?.cells[startCol+(incoming.at(-1)?.length||1)-1];if(target){const range=document.createRange();range.selectNodeContents(target);range.collapse(false);const s=getSelection();s.removeAllRanges();s.addRange(range);remember();}}
   return true;
  }
+ function pasteLink(url){
+  const token=++linkToken,a=text('a',url);a.href=url;a.dataset.pastedLink=token;
+  insert(a.outerHTML);
+  const link=editor.querySelector(`[data-pasted-link="${token}"]`);if(!link)return;
+  link.removeAttribute('data-pasted-link');
+  // Bound both outstanding requests and titles waiting for an inactive note.
+  if(pastedLinks.size>=16)pastedLinks.delete(pastedLinks.keys().next().value);
+  pastedLinks.set(token,{note:active,link,url});
+  post({type:'link_metadata',token,url});
+ }
+ function applyLinkTitles(){
+  if(composing||dialog.open||window.cnoteTools?.workspace||!editor.contains(document.activeElement))return;
+  for(const [token,request]of pastedLinks){
+   const {note,link,url,title}=request;
+   if(note!==active||title===undefined)continue;
+   pastedLinks.delete(token);
+   // Undo, deletion, remote replacement or manual edits invalidate the request.
+   if(!title||!editor.contains(link)||link.getAttribute('href')!==url||link.textContent!==url)continue;
+   const s=getSelection();if(!s?.rangeCount)continue;
+   const saved=s.getRangeAt(0).cloneRange();
+   if(!saved.collapsed&&saved.intersectsNode(link))continue;
+   const atLink=link.contains(saved.startContainer);
+   const range=document.createRange();range.selectNode(link);s.removeAllRanges();s.addRange(range);
+   // A native edit keeps title replacement undoable, unlike a DOM text mutation.
+   const replacement=text('a',title);replacement.href=url;replacement.dataset.pastedLink=token;
+   document.execCommand('insertHTML',false,replacement.outerHTML);
+   const inserted=editor.querySelector(`[data-pasted-link="${token}"]`);inserted?.removeAttribute('data-pasted-link');
+   if(atLink&&inserted){saved.setStartAfter(inserted);saved.collapse(true);}
+   s.removeAllRanges();s.addRange(saved);remember();changed();
+  }
+ }
+ onEditor('focusin',()=>{if(pastedLinks.size)setTimeout(applyLinkTitles,0);});
+ onEditor('compositionend',()=>{if(pastedLinks.size)setTimeout(applyLinkTitles,0);});
  onEditor('paste',e=>{
   const clipboard=e.clipboardData;if(!clipboard)return;e.preventDefault();remember();
   if(plainPaste){plainPaste=false;clearTimeout(plainPasteTimer);command('insertText',clipboard.getData('text/plain'));return;}
   const image=[...clipboard.items].find(i=>i.type.startsWith('image/'));
   if(image){const file=image.getAsFile();if(!file||file.size>8*1024*1024){receive({type:'error',message:'图片最大支持 8 MB，请缩小后重试。'});return;}const target=id;const reader=new FileReader();reader.onload=()=>{if(target!==id)return;const img=document.createElement('img');img.src=reader.result;img.alt='粘贴的图片';insert(img.outerHTML);};reader.readAsDataURL(file);return;}
   const html=clipboard.getData('text/html'),plain=clipboard.getData('text/plain');
+  // Match the web notebook: a lone HTTP(S) URL takes precedence over clipboard HTML.
+  const url=plain.trim();
+  if(/^https?:\/\/\S+$/i.test(url)&&safeURL(url)){pasteLink(url);return;}
   // Real HTML tables preserve formatting; terminal apps often supply only a <pre> wrapper.
   const safe=html?sanitize(html):'',template=document.createElement('template');if(safe)template.innerHTML=safe;
   const source=template.content.querySelector('table'),rows=source?null:window.cnoteTableText.detect(plain);
@@ -517,6 +555,11 @@
  }
  function receive(e){
   switch(e.type){
+   case 'link_metadata_result':{
+    const request=pastedLinks.get(e.token);if(!request)break;
+    if(typeof e.title!=='string'||!e.title.trim()){pastedLinks.delete(e.token);break;}
+    request.title=e.title.trim().slice(0,300);applyLinkTitles();break;
+   }
    case 'image_clipboard_result':{
     const request=imagePending;if(!request||request.token!==e.token)break;
     imagePending=null;positionImageActions();

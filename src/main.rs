@@ -5,6 +5,7 @@ mod cloud;
 mod credential_store;
 mod engine;
 mod icons;
+mod link_metadata;
 mod menus;
 mod note_title;
 mod ocr;

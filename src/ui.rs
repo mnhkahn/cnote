@@ -385,6 +385,28 @@ impl Notebook {
     }
     fn ipc(&mut self, v: Value, window: &mut Window, cx: &mut Context<Self>) {
         match v["type"].as_str().unwrap_or_default() {
+            "link_metadata" => {
+                let token = v["token"].as_u64().unwrap_or(0);
+                let url = v["url"].as_str().unwrap_or_default().to_owned();
+                if url.len() > 8192 {
+                    return;
+                }
+                cx.spawn(async move |this, cx| {
+                    let title = cx
+                        .background_executor()
+                        .spawn(async move {
+                            crate::link_metadata::fetch_title(&url).unwrap_or_default()
+                        })
+                        .await;
+                    let _ = this.update(cx, |this, _| {
+                        this.js(&format!(
+                            "window.cnote&&cnote.receive({})",
+                            json!({"type":"link_metadata_result","token":token,"title":title})
+                        ));
+                    });
+                })
+                .detach();
+            }
             "image_clipboard" => {
                 let token = v["token"].as_u64().unwrap_or(0);
                 let source = v["src"].as_str().unwrap_or_default().to_owned();
