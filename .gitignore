@@ -15,3 +15,6 @@ __pycache__/
 *.pfx
 *.keychain
 *.keychain-db
+
+# Isolated browser WASM target.
+/web/core/target/

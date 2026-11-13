@@ -4,9 +4,12 @@
   "scripts": {
     "test": "node --test --test-concurrency=1 tests/editor.test.cjs tests/editor-link.test.cjs tests/note-shortcuts.test.cjs tests/tools.test.cjs tests/tools-core.test.cjs tests/trello.test.cjs tests/trello-ocr.test.cjs",
     "build:tools": "node scripts/build-tools.cjs",
-    "check:tools": "node scripts/build-tools.cjs --check"
+    "check:tools": "node scripts/build-tools.cjs --check",
+    "build:web": "node scripts/build-web.cjs",
+    "test:web": "node --test --test-concurrency=1 tests/web.test.cjs"
   },
   "devDependencies": {
+    "@azure/msal-browser": "5.29.1",
     "@nodable/entities": "3.1.0",
     "diff": "9.0.0",
     "esbuild": "0.28.2",

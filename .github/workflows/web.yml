@@ -1,0 +1,48 @@
+name: Export notes WebAssembly
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: notes-web-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web/core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install matching WASM binding generator
+        run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
+      - run: cargo fmt --manifest-path web/core/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path web/core/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo test --manifest-path web/core/Cargo.toml --locked
+      - name: Build notes only
+        run: npm run build:web
+        env:
+          CNOTE_WEB_VERSION: ${{ github.ref_name }}
+          CNOTE_WEB_CLIENT_ID: ${{ vars.CNOTE_WEB_CLIENT_ID }}
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:web
+      - name: Archive notes artifact
+        run: tar -czf dist/cnote-web.tar.gz -C dist/cnote-web .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cnote-notes-web-${{ github.sha }}
+          path: dist/cnote-web.tar.gz
+          if-no-files-found: error
+          retention-days: 14
