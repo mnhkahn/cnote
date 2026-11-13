@@ -100,9 +100,14 @@ jobs:
       # temporary signing keychain. Explicit cleanup can hang Security.framework
       # and prevent the publish job from starting after artifacts are uploaded.
 
+  web:
+    uses: ./.github/workflows/web.yml
+    permissions:
+      contents: read
+
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, web]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -113,14 +118,26 @@ jobs:
           pattern: release-*
           path: release-assets
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: cnote-notes-web-${{ github.sha }}
+          path: web-release
+      - name: Verify and include notes Web package
+        shell: bash
+        run: |
+          (cd web-release && sha256sum -c cnote-web.tar.gz.sha256)
+          cp web-release/cnote-web.tar.gz web-release/cnote-web.tar.gz.sha256 release-assets/
       - name: Create release if needed and upload packages
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
-          # Publish after both app packages are built.
+          # Publish only after both macOS architectures and the notes Web package pass.
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "CNote $RELEASE_TAG"
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "CNote $RELEASE_TAG" --draft
           fi
           gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi

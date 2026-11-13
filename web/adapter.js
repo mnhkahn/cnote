@@ -242,7 +242,7 @@ try {
  window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
  db=await new Promise((resolve,reject)=>{const request=indexedDB.open('cnote-web',1);request.onupgradeneeded=()=>request.result.createObjectStore('state');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(Error('无法打开浏览器笔记数据库'));});
  notebook=new Notebook((await transact('readonly',store=>store.get('notebook')))||'');
- auth=new PublicClientApplication({auth:{clientId:config.clientId,authority:'https://login.microsoftonline.com/consumers',redirectUri:new URL('./auth.html',location.href).href},cache:{cacheLocation:'sessionStorage'}});
+ auth=new PublicClientApplication({auth:{clientId:config.clientId,authority:'https://login.microsoftonline.com/consumers',redirectUri:new URL(config.redirectUri||'./auth.html',location.href).href},cache:{cacheLocation:'sessionStorage'}});
  await auth.initialize();
  authAccount=auth.getAllAccounts().find(a=>a.homeAccountId===snapshot().account)||null;if(authAccount)auth.setActiveAccount(authAccount);
  const preference=localStorage.getItem('cnote-web-theme')||'system';window.cnoteTheme.set(preference);document.getElementById('theme').value=preference;

@@ -3,10 +3,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 concurrency:
-  group: notes-web-${{ github.ref }}
+  group: notes-web-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   export:
@@ -39,10 +40,14 @@ jobs:
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:web
       - name: Archive notes artifact
-        run: tar -czf dist/cnote-web.tar.gz -C dist/cnote-web .
+        run: |
+          tar -czf dist/cnote-web.tar.gz -C dist/cnote-web .
+          (cd dist && sha256sum cnote-web.tar.gz > cnote-web.tar.gz.sha256)
       - uses: actions/upload-artifact@v4
         with:
           name: cnote-notes-web-${{ github.sha }}
-          path: dist/cnote-web.tar.gz
+          path: |
+            dist/cnote-web.tar.gz
+            dist/cnote-web.tar.gz.sha256
           if-no-files-found: error
           retention-days: 14

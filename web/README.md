@@ -35,3 +35,11 @@ MSAL v5 使用独立回调桥接页，参考 https://learn.microsoft.com/en-us/e
 - 粘贴链接标题：浏览器受目标网站 CORS 限制。允许 CORS 的网页可直接获取；失败保留网址。可选 `metadataEndpoint` 只接受同源 URL，服务契约为 `GET ?url=...` 返回 `{"title":"..."}`；宿主后端需自行实现有限时、限大小和目标地址校验的取标题服务。本产物没有第三方代理，也不包含该后端。
 - 图片复制受 Clipboard API、用户授权和图片 CORS 限制，失败保留原图。打印与 HTML 下载使用浏览器功能。
 - 不含 Service Worker；已打开的页面可以离线编辑，离线冷启动缓存不是本次范围。导出产物不会自动更新现有 `cyeam_web`，接入与部署应另行完成。
+
+## 与 cyeam_web 发布衔接
+
+正式 tag 发布工作流复用 Web 构建，等待桌面包和 Web 包全部通过，再将 `cnote-web.tar.gz` 与 `cnote-web.tar.gz.sha256` 一起上传到 GitHub Release，上传完整后公开 Release。普通分支/PR 继续仅产生 Actions 临时产物。
+
+`cyeam_web` 在自己的部署 Action 中获取最新正式 Release、校验压缩包及内部文件，再放入 Docker 构建上下文。它不在 Docker 内编译 Rust，也不依赖 Actions 临时产物。网站部署仍由网站自己的推送或手动部署触发；CNote 发布不会自动触发网站部署。
+
+宿主会把配置中的 `redirectUri` 设为固定的 `/note/auth.html`，因此版本资源目录变化不需要重复登记回调。该地址仍需在 Microsoft 应用中登记为 SPA redirect URI。
