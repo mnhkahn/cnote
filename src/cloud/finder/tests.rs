@@ -1,8 +1,9 @@
 use super::*;
 use std::io::Write;
 use std::sync::atomic::AtomicUsize;
+type Entries = Arc<Mutex<HashMap<String, (Value, Vec<u8>)>>>;
 struct Memory {
-    entries: Arc<Mutex<HashMap<String, (Value, Vec<u8>)>>>,
+    entries: Entries,
     reads: Arc<AtomicUsize>,
 }
 impl Memory {
@@ -64,10 +65,10 @@ impl Drive for Memory {
     }
     fn upload(&mut self, path: &str, mut file: File, version: Option<&str>) -> DavResult<Value> {
         let mut entries = self.entries.lock().unwrap();
-        if let Some((old, _)) = entries.get(path) {
-            if old["eTag"].as_str() != version {
-                return Err(Failure(412, "Conflict"));
-            }
+        if let Some((old, _)) = entries.get(path)
+            && old["eTag"].as_str() != version
+        {
+            return Err(Failure(412, "Conflict"));
         }
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;

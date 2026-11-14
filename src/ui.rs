@@ -944,12 +944,12 @@ impl Notebook {
                     result["error"] = json!(error.to_string());
                 }
             }
-            if result["data"]["open"] == true {
-                if let Some(paths) = result["data"]["paths"].as_array() {
-                    for path in paths.iter().filter_map(Value::as_str) {
-                        if let Ok(url) = url::Url::from_file_path(path) {
-                            cx.open_url(url.as_str());
-                        }
+            if result["data"]["open"] == true
+                && let Some(paths) = result["data"]["paths"].as_array()
+            {
+                for path in paths.iter().filter_map(Value::as_str) {
+                    if let Ok(url) = url::Url::from_file_path(path) {
+                        cx.open_url(url.as_str());
                     }
                 }
             }

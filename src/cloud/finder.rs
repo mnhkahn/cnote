@@ -171,15 +171,15 @@ impl Bridge {
         }
     }
     fn version(&self, path: &str, request: &Request) -> DavResult<Option<String>> {
-        if let Some(value) = header(request, "If-Match") {
-            if value != "*" {
-                return Ok(Some(value));
-            }
+        if let Some(value) = header(request, "If-Match")
+            && value != "*"
+        {
+            return Ok(Some(value));
         }
-        if let Some(lock) = self.locks.lock().unwrap().get(path) {
-            if header(request, "If").is_some_and(|value| value.contains(&lock.token)) {
-                return Ok(lock.version.clone());
-            }
+        if let Some(lock) = self.locks.lock().unwrap().get(path)
+            && header(request, "If").is_some_and(|value| value.contains(&lock.token))
+        {
+            return Ok(lock.version.clone());
         }
         Ok(self.versions.lock().unwrap().get(path).cloned())
     }
