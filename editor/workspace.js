@@ -41,7 +41,7 @@
    window.cnote?.action('save');
    return;
   }
-  const index = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].indexOf(event.code);
+  const index = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6'].indexOf(event.code);
   if (index < 0) return;
   event.preventDefault();
   event.stopImmediatePropagation();

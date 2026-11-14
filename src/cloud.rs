@@ -19,8 +19,10 @@ const AUTH: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0";
 const GRAPH: &str = "https://graph.microsoft.com/v1.0";
 const CLIENT_ID: &str = "e1f582c1-1568-4347-8c5b-1906164e637f";
 const SCOPES: &str = "Files.ReadWrite User.Read offline_access";
+mod drive;
 #[derive(Debug)]
 pub enum Job {
+    Drive(serde_json::Value),
     Restore,
     Login,
     Logout,
@@ -43,6 +45,7 @@ pub struct Item {
 }
 #[derive(Debug)]
 pub enum Reply {
+    Drive(serde_json::Value),
     Account {
         id: String,
         name: String,
@@ -356,6 +359,15 @@ impl Cloud {
     }
     fn run(&mut self, job: Job) -> Result<Reply> {
         match job {
+            Job::Drive(v) => {
+                let request = v["request"].clone();
+                Ok(Reply::Drive(match self.drive_request(&v) {
+                    Ok(data) => serde_json::json!({"request":request,"data":data}),
+                    Err(error) => {
+                        serde_json::json!({"request":request,"error":format!("{error:#}")})
+                    }
+                }))
+            }
             Job::Restore => self.restore(),
             Job::Logout => {
                 crate::credential_store::remove("onedrive-oauth")?;
@@ -537,7 +549,9 @@ pub fn spawn(
                     let _ = tx.send(crate::engine::Command::Network(epoch, Box::new(reply)));
                 };
                 use crate::analytics::{Event as AnalyticsEvent, Operation, Outcome};
+                let drive_request = matches!(&job, Job::Drive(_));
                 let operation = match &job {
+                    Job::Drive(_) => Operation::List,
                     Job::Restore => Operation::Restore,
                     Job::Login => Operation::Login,
                     Job::Logout => Operation::Logout,
@@ -552,7 +566,7 @@ pub fn spawn(
                 } else {
                     c.run(job)
                 };
-                if generation.load(Ordering::SeqCst) == epoch {
+                if !drive_request && generation.load(Ordering::SeqCst) == epoch {
                     let outcome = match &result {
                         Ok(Reply::Conflict { .. }) => Outcome::Conflict,
                         Ok(Reply::LoggedOut) if matches!(operation, Operation::Restore) => {

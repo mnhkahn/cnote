@@ -58,12 +58,13 @@
  function setText(instance,value){suppress=true;instance.session.setValue(value);suppress=false;}
  function show(index){
   if(index!==4)window.cnoteTrello?.hide();
-  $('tool-status').hidden=index===4;
+  $('tool-status').hidden=index===4||index===5;
   workspace=index;document.body.classList.toggle('tools-open',index!==0);$('local-tools').hidden=index===0;
-  for(const [i,id]of [[1,'text-tool'],[2,'diff-tool'],[3,'csv-tool'],[4,'trello-tool']])$(id).hidden=index!==i;
+  for(const [i,id]of [[1,'text-tool'],[2,'diff-tool'],[3,'csv-tool'],[4,'trello-tool'],[5,'drive-tool']])$(id).hidden=index!==i;
   if(!index){if(!document.getElementById('document').hidden)window.cnote?.focusEditor();return;}
   $('local-tools').inert=!restored;if(!restored){if(!restoreRequested){restoreRequested=true;post({type:'tool_ready'});}status('正在读取本地工具草稿…');return;}
   if(index===4){window.cnoteTrello.show();return;}
+  if(index===5){window.cnoteDrive.show();return;}
   ensureEditors();
   if(index===1){textEditor.resize();textEditor.focus();}
   if(index===2){leftEditor.resize();rightEditor.resize();leftEditor.focus();}
@@ -243,6 +244,7 @@
   if(workspace===3&&key==='z'&&!event.target.closest('input,textarea,[contenteditable=true]')){event.preventDefault();event.stopImmediatePropagation();$(event.shiftKey?'table-redo':'table-undo').click();}
  },true);
  function edit(command){
+  if(workspace===5&&window.cnoteDrive?.shortcut(command))return;
   const focused=document.activeElement;
   if(focused?.matches('input:not(.ace_text-input),textarea:not(.ace_text-input),[contenteditable=true]')){document.execCommand(command);return;}
   if(workspace===3&&(command==='undo'||command==='redo')){$(command==='undo'?'table-undo':'table-redo').click();return;}

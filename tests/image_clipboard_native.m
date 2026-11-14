@@ -24,6 +24,20 @@ int main(void) {
    const unsigned char invalid[]={1,2,3};
    assert(!cnote_copy_image(invalid,sizeof(invalid),html));
    assert(pasteboard.changeCount==unchanged);
+   NSString *directory=[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+   assert([NSFileManager.defaultManager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil]);
+   NSString *file=[directory stringByAppendingPathComponent:@"文件.txt"];
+   assert([@"downloaded" writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+   NSData *paths=[NSJSONSerialization dataWithJSONObject:@[file] options:0 error:nil];
+   NSString *json=[[NSString alloc] initWithData:paths encoding:NSUTF8StringEncoding];
+   assert(cnote_copy_files(json.UTF8String));
+   NSArray *urls=[pasteboard readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey:@YES}];
+   assert(urls.count==1 && [[urls[0] path] isEqualToString:file]);
+   unchanged=pasteboard.changeCount;
+   assert(!cnote_copy_files("[\"/nonexistent-cnote-file\"]"));
+   assert(pasteboard.changeCount==unchanged);
+   [NSFileManager.defaultManager removeItemAtPath:directory error:nil];
+   puts("Native file clipboard: file URLs and failure preservation passed.");
    puts("Native image clipboard: PNG pixels, HTML representation, and failure preservation passed.");
   } @finally {
    [pasteboard clearContents];if(previous.count)[pasteboard writeObjects:previous];

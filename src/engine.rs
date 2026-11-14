@@ -26,6 +26,9 @@ pub enum Command {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    Drive {
+        result: Value,
+    },
     Theme {
         theme: Theme,
     },
@@ -394,6 +397,7 @@ impl Engine {
             self.intent = self.intent.max(v["intent"].as_u64().unwrap_or(self.intent));
         }
         match v["type"].as_str().unwrap_or_default() {
+            "drive" => self.job(Job::Drive(v)),
             "tool_ready" => {
                 let state = self
                     .db
@@ -672,6 +676,10 @@ impl Engine {
             return Ok(());
         }
         match r {
+            Reply::Drive(result) => {
+                self.emit(Event::Drive { result });
+                return Ok(());
+            }
             Reply::Device { code, url } => self.emit(Event::Dialog {
                 kind: "login".into(),
                 data: json!({"code":code,"url":url}),

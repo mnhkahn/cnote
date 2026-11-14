@@ -7,9 +7,17 @@ pub enum Workspace {
     Diff,
     Csv,
     Trello,
+    OneDrive,
 }
 impl Workspace {
-    pub const ALL: [Self; 5] = [Self::Notes, Self::Text, Self::Diff, Self::Csv, Self::Trello];
+    pub const ALL: [Self; 6] = [
+        Self::Notes,
+        Self::Text,
+        Self::Diff,
+        Self::Csv,
+        Self::Trello,
+        Self::OneDrive,
+    ];
     pub fn index(self) -> usize {
         self as usize
     }
@@ -20,6 +28,7 @@ impl Workspace {
             Self::Diff => "Diff",
             Self::Csv => "CSV",
             Self::Trello => "Trello",
+            Self::OneDrive => "OneDrive",
         }
     }
     pub fn icon(self) -> &'static str {
@@ -29,6 +38,7 @@ impl Workspace {
             Self::Diff => "file-diff",
             Self::Csv => "table",
             Self::Trello => "calendar-check",
+            Self::OneDrive => "cloud",
         }
     }
     /// Public website entry points. URLs only select a workspace.
@@ -52,6 +62,7 @@ impl Workspace {
             ("tool", "/diff") => Some(Self::Diff),
             ("tool", "/csv") => Some(Self::Csv),
             ("tool", "/trello") => Some(Self::Trello),
+            ("tool", "/onedrive") => Some(Self::OneDrive),
             _ => None,
         }
     }
@@ -68,6 +79,17 @@ impl Workspace {
     }
 }
 pub const SHORTCUT_SCRIPT: &str = include_str!("../editor/workspace.js");
+pub fn copy_files(paths: &[serde_json::Value]) -> anyhow::Result<()> {
+    let json = std::ffi::CString::new(serde_json::to_string(paths)?)?;
+    unsafe extern "C" {
+        fn cnote_copy_files(json: *const std::ffi::c_char) -> i32;
+    }
+    anyhow::ensure!(
+        unsafe { cnote_copy_files(json.as_ptr()) } != 0,
+        "文件已下载，但无法写入剪贴板"
+    );
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -108,6 +130,7 @@ mod tests {
             ("cnote://tool/diff", Workspace::Diff),
             ("cnote://tool/csv", Workspace::Csv),
             ("cnote://tool/trello", Workspace::Trello),
+            ("cnote://tool/onedrive", Workspace::OneDrive),
         ] {
             assert_eq!(Workspace::from_url(url), Some(page));
             assert_eq!(Workspace::from_url(&format!("{url}/")), Some(page));
@@ -136,7 +159,7 @@ mod tests {
             r#"{"type":"logout"}"#,
             r#"{"type":"delete","id":"private"}"#,
             r#"{"type":"workspace","index":-1}"#,
-            r#"{"type":"workspace","index":5}"#,
+            r#"{"type":"workspace","index":6}"#,
             r#"{"type":"workspace","index":"1"}"#,
             "invalid",
         ] {
@@ -358,6 +381,11 @@ pub fn smoke_script(page: Workspace) -> String {
             "window.cnoteTrello",
             "",
             "!document.getElementById('trello-tool').hidden",
+        ),
+        Workspace::OneDrive => (
+            "window.cnoteDrive",
+            "",
+            "!document.getElementById('drive-tool').hidden",
         ),
         Workspace::Notes => return String::new(),
     };

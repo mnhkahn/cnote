@@ -59,7 +59,8 @@ static void editKey(NSWindow *window, NSString *characters, BOOL shift) {
  if(!forwarded)fprintf(stderr,"Failed to forward Command-%s (main=%d, webview=%d)\n",characters.UTF8String,NSApp.mainWindow==window,focusedWebView(event)!=nil);
  CHECK(forwarded);
 }
-static void ignoreWorkspace(unsigned int index) { (void)index; }
+static unsigned int lastWorkspace = 99;
+static void ignoreWorkspace(unsigned int index) { lastWorkspace = index; }
 static void navigationMatching(void) {
  unsigned short codes[]={123,124,125,126};
  unichar arrows[]={NSLeftArrowFunctionKey,NSRightArrowFunctionKey,NSDownArrowFunctionKey,NSUpArrowFunctionKey};
@@ -215,6 +216,16 @@ static void webEditing(void) {
  // Ace's optional searchbox module is not bundled. Verify event forwarding itself.
  js(view,@"document.activeElement.addEventListener('keydown',e=>{if(e.metaKey&&e.key.toLowerCase()==='f'){window.toolShortcutForwarded=true;e.preventDefault();e.stopImmediatePropagation();}},true)");
  editKey(window,@"f",NO);spin(^BOOL{return [js(view,@"!!window.toolShortcutForwarded") boolValue];});
+ step(@"OneDrive / Command-6 and native copy dispatch");
+ cnote_workspace_test_key(5);
+ spin(^BOOL{return lastWorkspace==5;});
+ js(view,@"window.driveMessages=[];window.ipc.postMessage=raw=>{const m=JSON.parse(raw);if(m.type==='drive'){driveMessages.push(m);setTimeout(()=>cnoteDrive.receive({request:m.request,data:m.op==='list'?{folder:{id:'root'},items:[{id:'file',name:'测试.txt',size:4,eTag:'v1'}]}:{directory:'/Downloads/test'}}),0);}};cnoteDrive.account(true,'Fixture account');cnoteTools.show(5)");
+ spin(^BOOL{return [js(view,@"!!document.querySelector('#drive-list [data-id=file]')") boolValue];});
+ js(view,@"document.querySelector('#drive-list [data-id=file]').click()");
+ editKey(window,@"c",NO);
+ spin(^BOOL{return [js(view,@"driveMessages.some(m=>m.op==='download'&&m.copy===true&&m.ids[0]==='file')") boolValue];});
+ editKey(window,@"f",NO);
+ spin(^BOOL{return [js(view,@"document.activeElement.id==='drive-search'") boolValue];});
  [window orderOut:nil];
 }
 int main(int argc,const char **argv) {
@@ -231,7 +242,7 @@ int main(int argc,const char **argv) {
   BOOL noUI=argc==2 && strcmp(argv[1],"--no-ui")==0;
   if(argc!=1 && !noUI){fprintf(stderr,"usage: workspace-native-tests [--no-ui | --self-test-failure timeout|check|javascript|exception]\n");return 2;}
   step(@"headless workspace, editing and navigation key matching");
-  for(unsigned int i=0;i<5;i++) {
+  for(unsigned int i=0;i<6;i++) {
    NSString *s=[NSString stringWithFormat:@"%u",i+1];
    CHECK(workspaceIndex(key(s,NSEventModifierFlagCommand))==i);
    CHECK(workspaceIndex(key(s,NSEventModifierFlagCommand|NSEventModifierFlagCapsLock))==i);
@@ -239,7 +250,7 @@ int main(int argc,const char **argv) {
    for(NSNumber *modifier in @[@(NSEventModifierFlagControl),@(NSEventModifierFlagOption),@(NSEventModifierFlagShift)])
     CHECK(workspaceIndex(key(s,NSEventModifierFlagCommand|modifier.unsignedIntegerValue))==-1);
   }
-  CHECK(workspaceIndex(key(@"6",NSEventModifierFlagCommand))==-1);
+  CHECK(workspaceIndex(key(@"7",NSEventModifierFlagCommand))==-1);
   for(NSString *s in @[@"a",@"c",@"v",@"x",@"z",@"b",@"i",@"u"]) {
    CHECK(editingSelector(key(s,NSEventModifierFlagCommand))!=NULL);
    CHECK(editingSelector(key(s,0))==NULL);

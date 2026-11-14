@@ -59,6 +59,7 @@ impl Notebook {
                                 Workspace::Diff,
                                 Workspace::Csv,
                                 Workspace::Trello,
+                                Workspace::OneDrive,
                                 Workspace::Notes,
                             ];
                             assert_eq!(page, expected[this.smoke_shortcuts]);
@@ -87,6 +88,8 @@ impl Notebook {
             .replace("/* STYLE */", include_str!("../editor/style.css"))
             .replace("/* TRELLO_STYLE */", include_str!("../tools/trello.css"))
             .replace("/* TRELLO_SCRIPT */", include_str!("../tools/trello.js"))
+            .replace("/* DRIVE_SCRIPT */", include_str!("../tools/drive.js"))
+            .replace("/* DRIVE_STYLE */", include_str!("../tools/drive.css"))
             .replace("/* TOOL_STYLE */", include_str!("../tools/style.css"))
             .replace("<!-- TOOL_HTML -->", include_str!("../tools/index.html"))
             .replace(
@@ -359,7 +362,9 @@ impl Notebook {
         }
     }
     pub fn refresh_workspace(&self) {
-        if self.workspace == Workspace::Trello {
+        if self.workspace == Workspace::OneDrive {
+            self.js("window.cnoteDrive?.refresh()");
+        } else if self.workspace == Workspace::Trello {
             self.js("window.cnoteTrello?.refresh()");
         } else {
             self.action("refresh", json!({}));
@@ -488,6 +493,7 @@ impl Notebook {
                     Workspace::Diff,
                     Workspace::Csv,
                     Workspace::Trello,
+                    Workspace::OneDrive,
                     Workspace::Notes,
                 ];
                 if self.smoke_shortcuts > 0
@@ -809,6 +815,28 @@ impl Notebook {
             }
             return;
         }
+        if let Event::Drive { mut result } = event {
+            if result["data"]["copy"] == true {
+                let paths = result["data"]["paths"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                if let Err(error) = workspace::copy_files(&paths) {
+                    result["error"] = json!(error.to_string());
+                }
+            }
+            if result["data"]["open"] == true {
+                if let Some(paths) = result["data"]["paths"].as_array() {
+                    for path in paths.iter().filter_map(Value::as_str) {
+                        if let Ok(url) = url::Url::from_file_path(path) {
+                            cx.open_url(url.as_str());
+                        }
+                    }
+                }
+            }
+            self.js(&format!("window.cnoteDrive?.receive({result})"));
+            return;
+        }
         if let Event::ToolExport { filename, bytes } = event {
             self.export_tool(filename, bytes, cx);
             return;
@@ -834,6 +862,11 @@ impl Notebook {
                 self.selected = selected.clone();
                 self.account = account.clone();
                 self.authenticated = *authenticated;
+                self.js(&format!(
+                    "window.cnoteDrive?.account({},{})",
+                    authenticated,
+                    json!(account)
+                ));
             }
             Event::Selected { id, intent } => {
                 self.intent = self.intent.max(*intent);

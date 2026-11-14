@@ -223,7 +223,7 @@
  }
  function showShortcuts(){
   remember();const list=document.createElement('div');list.className='shortcut-help';list.tabIndex=0;list.setAttribute('role','region');list.setAttribute('aria-label','快捷键列表');
-  const basics=[['撤销 / 重做','⌘Z / ⌘⇧Z'],['剪切 / 复制 / 粘贴 / 全选','⌘X / ⌘C / ⌘V / ⌘A'],['新建 / 保存笔记','⌘N / ⌘S'],['切换工作区','⌘1–⌘5'],['列表缩进 / 表格内移动','Tab / ⇧Tab'],['关闭查找 / 弹窗','Esc']];
+  const basics=[['撤销 / 重做','⌘Z / ⌘⇧Z'],['剪切 / 复制 / 粘贴 / 全选','⌘X / ⌘C / ⌘V / ⌘A'],['新建 / 保存笔记','⌘N / ⌘S'],['切换工作区','⌘1–⌘6'],['列表缩进 / 表格内移动','Tab / ⇧Tab'],['关闭查找 / 弹窗','Esc']];
   for(const [label,key] of [...shortcuts.map(s=>[s.label,s.display]),...basics]){const row=document.createElement('div');row.append(text('span',label),text('kbd',key));list.append(row);}
   modal('shortcuts','笔记快捷键',[list],[['关闭',()=>{}]]);
  }

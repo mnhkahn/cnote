@@ -2,7 +2,7 @@
   "name": "cnote-editor-tests",
   "private": true,
   "scripts": {
-    "test": "node --test --test-concurrency=1 tests/editor.test.cjs tests/editor-link.test.cjs tests/note-shortcuts.test.cjs tests/tools.test.cjs tests/tools-core.test.cjs tests/trello.test.cjs tests/trello-ocr.test.cjs",
+    "test": "node --test --test-concurrency=1 tests/editor.test.cjs tests/editor-link.test.cjs tests/note-shortcuts.test.cjs tests/tools.test.cjs tests/tools-core.test.cjs tests/trello.test.cjs tests/trello-ocr.test.cjs tests/drive.test.cjs",
     "build:tools": "node scripts/build-tools.cjs",
     "check:tools": "node scripts/build-tools.cjs --check",
     "build:web": "node scripts/build-web.cjs",

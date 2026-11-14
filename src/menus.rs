@@ -21,6 +21,7 @@ actions!(
         ShowDiff,
         ShowCsv,
         ShowTrello,
+        ShowOneDrive,
         ThemeSystem,
         ThemeLight,
         ThemeDark,
@@ -52,6 +53,7 @@ pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
         KeyBinding::new("cmd-3", ShowDiff, None),
         KeyBinding::new("cmd-4", ShowCsv, None),
         KeyBinding::new("cmd-5", ShowTrello, None),
+        KeyBinding::new("cmd-6", ShowOneDrive, None),
         KeyBinding::new("cmd-n", NewNote, None),
         KeyBinding::new("cmd-s", Save, None),
         KeyBinding::new("cmd-r", Sync, None),
@@ -197,6 +199,13 @@ pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
             let _ = window.update(cx, |v, w, cx| v.switch_workspace(Workspace::Trello, w, cx));
         });
     });
+    cx.on_action(move |_: &ShowOneDrive, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, w, cx| {
+                v.switch_workspace(Workspace::OneDrive, w, cx)
+            });
+        });
+    });
     cx.on_action(move |_: &Quit, cx| {
         cx.defer(move |cx| {
             let _ = window.update(cx, |v, _, _| v.action("close", json!({})));
@@ -283,6 +292,7 @@ pub fn set_menus(cx: &mut App, theme: Theme) {
             MenuItem::action("文本对比", ShowDiff),
             MenuItem::action("CSV 表格", ShowCsv),
             MenuItem::action("Trello 日历", ShowTrello),
+            MenuItem::action("OneDrive", ShowOneDrive),
             MenuItem::separator(),
             MenuItem::action("显示 / 隐藏侧栏", ToggleSidebar),
             MenuItem::submenu(

@@ -163,13 +163,26 @@ int cnote_copy_image(const unsigned char *bytes, size_t length, const char *html
 extern void cnote_theme_attach_menu(NSMenu *menu);
 
 static id workspaceMonitor;
+int cnote_copy_files(const char *json) {
+    if (![NSThread isMainThread] || !json) return 0;
+    NSData *data = [[NSString stringWithUTF8String:json] dataUsingEncoding:NSUTF8StringEncoding];
+    NSArray *paths = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![paths isKindOfClass:NSArray.class] || !paths.count) return 0;
+    NSMutableArray *urls = [NSMutableArray array];
+    for (id path in paths) {
+        if (![path isKindOfClass:NSString.class] || ![path isAbsolutePath] || ![NSFileManager.defaultManager fileExistsAtPath:path]) return 0;
+        [urls addObject:[NSURL fileURLWithPath:path]];
+    }
+    [NSPasteboard.generalPasteboard clearContents];
+    return [NSPasteboard.generalPasteboard writeObjects:urls] ? 1 : 0;
+}
 static void (*workspaceCallback)(unsigned int);
 static NSInteger workspaceIndex(NSEvent *event) {
     NSEventModifierFlags flags = event.modifierFlags;
     if (event.type != NSEventTypeKeyDown || !(flags & NSEventModifierFlagCommand)
         || flags & (NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift)) return -1;
     NSString *key = event.charactersIgnoringModifiers;
-    if (key.length == 1 && [key characterAtIndex:0] >= '1' && [key characterAtIndex:0] <= '5')
+    if (key.length == 1 && [key characterAtIndex:0] >= '1' && [key characterAtIndex:0] <= '6')
         return [key characterAtIndex:0] - '1';
     return -1;
 }
@@ -254,6 +267,12 @@ static BOOL forwardEditingKey(NSEvent *event) {
     SEL selector = editingSelector(event);
     WKWebView *view = (selector || note) ? focusedWebView(event) : nil;
     if (!view) return NO;
+    if (selector == @selector(copy:)) {
+        [view evaluateJavaScript:@"!!window.cnoteDrive?.shortcut('copy')" completionHandler:^(id result, NSError *error) {
+            if ((error || ![result boolValue]) && focusedWebView(event) == view) [NSApp sendAction:@selector(copy:) to:nil from:event];
+        }];
+        return YES;
+    }
     if (note) {
         // Wry does not deliver these Command equivalents to the DOM reliably.
         // The editor checks focus, dialogs and workspace before formatting.
@@ -267,7 +286,7 @@ static BOOL forwardEditingKey(NSEvent *event) {
             }];
             return YES;
         }
-        NSString *script = [NSString stringWithFormat:@"!!(window.cnote&&cnote.formatShortcut('%@'))", note];
+        NSString *script = [NSString stringWithFormat:@"!!(window.cnoteDrive?.shortcut('%@')||(window.cnote&&cnote.formatShortcut('%@')))", note, note];
         [view evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
             // Keep code-editor and text-field shortcuts working outside note content.
             if (!error && ![result boolValue] && focusedWebView(event) == view) {
@@ -349,9 +368,9 @@ void cnote_workspace_test_more_menu(void) {
 }
 // The smoke test posts real Cocoa key events while WKWebView is first responder.
 void cnote_workspace_test_key(unsigned int index) {
-    if (index > 4 || !NSApp.mainWindow) return;
+    if (index > 5 || !NSApp.mainWindow) return;
     NSString *key = [NSString stringWithFormat:@"%u", index + 1];
-    unsigned short codes[] = {18,19,20,21,23};
+    unsigned short codes[] = {18,19,20,21,23,22};
     NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint
         modifierFlags:NSEventModifierFlagCommand timestamp:NSProcessInfo.processInfo.systemUptime
         windowNumber:NSApp.mainWindow.windowNumber context:nil characters:key
