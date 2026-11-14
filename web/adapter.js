@@ -34,7 +34,7 @@ function render() {
  for (const n of state.notes.sort((a,b) => b.modified-a.modified)) {
   const row = document.createElement('div'), open = document.createElement('button'), remove = document.createElement('button');
   row.className = 'note-row';open.textContent = (n.conflict?'⚠ ':n.dirty?'• ':'') + n.title;open.className = n.id===state.selected?'active':'';
-  open.onclick = () => window.cnote.action('open',{id:n.id});
+  open.onclick = () => {if(mobileLayout.matches)setDrawer(false);window.cnote.action('open',{id:n.id});};
   remove.textContent = '×';remove.title = `删除 ${n.title}`;remove.onclick = () => window.cnote.action('delete',{id:n.id,title:n.title});
   row.append(open,remove);list.append(row);
  }
@@ -43,6 +43,7 @@ function render() {
 }
 async function open(id,intent) {
  const result = await mutate({type:'open',id});emit({...result,intent});
+ if(mobileLayout.matches)setDrawer(false);
  if(note(id)?.conflict)emit({type:'dialog',kind:'conflict',data:{id}});
 }
 function laterSync() { clearTimeout(syncTimer);syncTimer=setTimeout(()=>sync().catch(()=>status('OneDrive 同步失败，本地草稿已保留')),2000); }
@@ -75,7 +76,7 @@ async function handle(m) {
    catch { emit({type:'dialog',kind:'conflict_result',data:{id:m.id,ok:false,message:'草稿或云端版本已变化，或本地保存失败，请重新对比'}}); }break;
   case 'login':await login();break;
   case 'logout':await logout();break;
-  case 'sidebar':document.body.classList.toggle('sidebar-hidden');break;
+  case 'sidebar':toggleSidebar();break;
   case 'link': {
    try { const url=new URL(m.url);if(['http:','https:','mailto:'].includes(url.protocol))window.open(url.href,'_blank','noopener,noreferrer'); } catch {} break;
   }
@@ -223,10 +224,51 @@ window.addEventListener('beforeunload',event=>{window.cnote?.flush();if(dirty||e
 window.addEventListener('online',laterSync);
 setInterval(()=>{if(authAccount&&!document.hidden)laterSync();},60000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)laterSync();});
-document.getElementById('new-note').onclick=()=>window.cnote.action('new');
+const mobileLayout=matchMedia('(max-width:700px), (max-width:1000px) and (hover:none) and (pointer:coarse)'), sidebar=document.getElementById('web-sidebar'), drawerToggle=document.getElementById('mobile-note-list'), drawerShade=document.getElementById('sidebar-shade');
+function updateSidebar(){
+ const mobile=mobileLayout.matches, opened=mobile&&document.body.classList.contains('mobile-sidebar-open');
+ sidebar.inert=mobile?!opened:document.body.classList.contains('sidebar-hidden');
+ sidebar.setAttribute('aria-hidden',String(sidebar.inert));
+ if(opened){sidebar.setAttribute('role','dialog');sidebar.setAttribute('aria-modal','true');}else{sidebar.removeAttribute('role');sidebar.removeAttribute('aria-modal');}
+ drawerToggle.setAttribute('aria-expanded',String(opened));drawerShade.hidden=!opened;
+ for(const element of document.querySelectorAll('body>header,body>main,body>footer'))element.inert=opened;
+}
+function setDrawer(opened){
+ const wasOpen=document.body.classList.contains('mobile-sidebar-open');
+ document.body.classList.toggle('mobile-sidebar-open',mobileLayout.matches&&opened);
+ document.getElementById('mobile-more').open=false;updateSidebar();
+ if(mobileLayout.matches&&opened)document.getElementById('close-sidebar').focus();
+ else if(mobileLayout.matches&&wasOpen)drawerToggle.focus();
+}
+function toggleSidebar(){
+ if(mobileLayout.matches)setDrawer(!document.body.classList.contains('mobile-sidebar-open'));
+ else{document.body.classList.toggle('sidebar-hidden');updateSidebar();}
+}
+function viewportHeight(){
+ if(mobileLayout.matches&&window.visualViewport)document.body.style.setProperty('--web-viewport-height',`${window.visualViewport.height}px`);
+ else document.body.style.removeProperty('--web-viewport-height');
+}
+mobileLayout.addEventListener('change',()=>{setDrawer(false);viewportHeight();});
+window.visualViewport?.addEventListener('resize',viewportHeight);window.addEventListener('resize',viewportHeight);
+updateSidebar();viewportHeight();
+drawerToggle.onclick=toggleSidebar;
+for(const button of [document.getElementById('close-sidebar'),drawerShade])button.onclick=()=>setDrawer(false);
+document.addEventListener('keydown',event=>{
+ if(event.key==='Escape'){if(document.body.classList.contains('mobile-sidebar-open')){event.preventDefault();setDrawer(false);}document.getElementById('mobile-more').open=false;}
+ if(event.key==='Tab'&&mobileLayout.matches&&document.body.classList.contains('mobile-sidebar-open')){
+  const controls=[...sidebar.querySelectorAll('button,select,a[href]')].filter(el=>!el.disabled&&el.getClientRects().length);
+  const first=controls[0],last=controls.at(-1);
+  if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
+  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+ }
+});
+const more=document.getElementById('mobile-more');
+document.addEventListener('click',event=>{if(!more.contains(event.target))more.open=false;});
+for(const action of ['export','print'])document.getElementById('mobile-'+action).onclick=()=>{more.open=false;document.getElementById(action).click();};
+document.getElementById('new-note').onclick=()=>{if(mobileLayout.matches)setDrawer(false);window.cnote.action('new');};
 document.getElementById('refresh').onclick=()=>window.cnote.action('save');
-document.getElementById('toggle-sidebar').onclick=()=>document.body.classList.toggle('sidebar-hidden');
-document.getElementById('login').onclick=()=>window.cnote.action(authAccount?'logout':'login');
+document.getElementById('toggle-sidebar').onclick=toggleSidebar;
+document.getElementById('login').onclick=()=>{if(mobileLayout.matches)setDrawer(false);window.cnote.action(authAccount?'logout':'login');};
 document.getElementById('theme').onchange=event=>{window.cnoteTheme.set(event.target.value);localStorage.setItem('cnote-web-theme',event.target.value);};
 try {
  config=await fetch('./config.json').then(r=>{if(!r.ok)throw Error('无法读取配置');return r.json();});

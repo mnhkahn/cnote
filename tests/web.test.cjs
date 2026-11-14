@@ -33,7 +33,7 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(`${name}:
   await page.locator('#save').click();
   await page.waitForFunction(()=>document.getElementById('status').textContent==='已保存到本机');
   await page.reload();await page.waitForFunction(()=>document.body.dataset.ready==='true');
-  await page.waitForFunction(()=>document.getElementById('editor').textContent==='保存到浏览器的正文');
+  await page.waitForFunction(()=>document.getElementById('editor')?.textContent==='保存到浏览器的正文');
   assert.equal(await page.locator('#note-list .note-row').count(),1);
   await page.getByLabel('主题').selectOption('dark');assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
   await page.locator('#editor').focus();await page.keyboard.press('Meta+End');
@@ -110,6 +110,78 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(`${name}:
   await page.locator('#save').click();await page.waitForFunction(()=>document.querySelector('#note-list')?.textContent.includes('External note'));
   files.delete('external');await page.locator('#save').click();await page.waitForFunction(()=>document.querySelectorAll('#note-list .note-row').length===0);
   assert(requests.every(r=>r.headers.authorization==='Bearer test-token'));
+  assert.deepEqual(errors,[]);
+ }finally{await browser.close();}
+});
+for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(`${name}: mobile notes drawer, full-width editing and desktop layout`,async()=>{
+ const browser=await type.launch({headless:true});
+ try{
+  const context=await browser.newContext({viewport:{width:390,height:844},hasTouch:true,acceptDownloads:true});
+  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(7000);
+  await page.route('https://**/*',route=>route.abort());
+  await page.goto(origin);await page.waitForFunction(()=>document.body.dataset.ready==='true');
+  const geometry=()=>page.evaluate(()=>({
+   width:innerWidth,bodyWidth:document.body.scrollWidth,mainLeft:document.querySelector('main').getBoundingClientRect().left,mainWidth:document.querySelector('main').getBoundingClientRect().width,
+   headerHeight:document.querySelector('header').getBoundingClientRect().height,toolbarWidth:document.getElementById('toolbar').clientWidth,toolbarScroll:document.getElementById('toolbar').scrollWidth,
+   bodyHeight:document.body.getBoundingClientRect().height,viewportHeight:visualViewport.height
+  }));
+  for(const [width,height]of [[320,844],[390,844],[700,844],[844,390]]){
+   await page.setViewportSize({width,height});
+   await page.waitForFunction(width=>innerWidth===width&&Math.abs(document.body.getBoundingClientRect().height-visualViewport.height)<2,width);
+   const g=await geometry();assert.equal(g.mainLeft,0);assert.equal(g.mainWidth,width);assert(g.bodyWidth<=width,JSON.stringify(g));assert(g.headerHeight<=130,JSON.stringify(g));assert(g.toolbarScroll>g.toolbarWidth);assert(Math.abs(g.bodyHeight-g.viewportHeight)<2,JSON.stringify(g));
+   assert.equal(await page.locator('#web-sidebar').isVisible(),false);
+   assert.equal(await page.locator('#image-actions').isVisible(),false);
+   assert.equal(await page.locator('#export').isVisible(),false);assert.equal(await page.locator('#print').isVisible(),false);
+   await page.getByRole('button',{name:'☰ 笔记',exact:true}).click();
+   assert.equal(await page.getByRole('dialog',{name:'笔记列表',exact:true}).isVisible(),true);
+   assert.equal(await page.locator('main').evaluate(el=>el.inert),true);
+   assert.equal(await page.locator('#mobile-note-list').getAttribute('aria-expanded'),'true');
+   await page.keyboard.press('Escape');assert.equal(await page.locator('#web-sidebar').isVisible(),false);
+   assert.equal(await page.locator('#mobile-note-list').evaluate(el=>el===document.activeElement),true);
+  }
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('#mobile-note-list').click();await page.locator('#sidebar-shade').click({position:{x:382,y:300}});assert.equal(await page.locator('#web-sidebar').isVisible(),false);
+  await page.locator('#mobile-note-list').click();await page.locator('#new-note').click();
+  assert.equal(await page.locator('#web-sidebar').isVisible(),false);
+  await page.getByPlaceholder('给笔记起个名字').fill('手机回归笔记');await page.getByRole('button',{name:'创建',exact:true}).click();
+  await page.locator('#editor').fill('手机全宽正文，保存后刷新仍保留。');await page.locator('#save').click();
+  await page.waitForFunction(()=>document.getElementById('status').textContent==='已保存到本机');
+  await page.reload();await page.waitForFunction(()=>document.body.dataset.ready==='true');
+  await page.waitForFunction(()=>document.getElementById('editor')?.textContent==='手机全宽正文，保存后刷新仍保留。');
+  assert.equal(await page.locator('#web-sidebar').isVisible(),false);
+  await page.locator('#mobile-note-list').click();await page.locator('#note-list .note-row button').first().click();
+  await page.waitForFunction(()=>!document.body.classList.contains('mobile-sidebar-open'));
+  assert.equal(await page.locator('main').evaluate(el=>el.inert),false);
+  await page.getByLabel('更多操作',{exact:true}).click();assert.equal(await page.getByRole('button',{name:'导出 HTML',exact:true}).isVisible(),true);assert.equal(await page.getByRole('button',{name:'打印',exact:true}).isVisible(),true);
+  const downloading=page.waitForEvent('download');await page.getByRole('button',{name:'导出 HTML',exact:true}).click();const download=await downloading;
+  assert(fs.readFileSync(await download.path(),'utf8').includes('手机全宽正文'));assert.equal(await page.locator('#mobile-more').getAttribute('open'),null);
+  await page.evaluate(()=>{window.mobilePrintCount=0;window.print=()=>{window.mobilePrintCount++;};});
+  await page.getByLabel('更多操作',{exact:true}).click();await page.getByRole('button',{name:'打印',exact:true}).click();
+  await page.waitForFunction(()=>window.mobilePrintCount===1);assert.equal(await page.locator('#mobile-more').getAttribute('open'),null);
+
+  // Resizing with an open drawer must release background inertness and retain desktop geometry.
+  await page.locator('#mobile-note-list').click();await page.setViewportSize({width:1280,height:800});
+  await page.waitForFunction(()=>!document.querySelector('main').inert);
+  const desktop=await geometry();assert.equal(desktop.mainLeft,250);assert.equal(desktop.mainWidth,1030);
+  assert.equal(await page.locator('#web-sidebar').isVisible(),true);assert.equal(await page.locator('#mobile-note-list').isVisible(),false);assert.equal(await page.locator('#mobile-more').isVisible(),false);
+  assert.equal(await page.locator('#export').isVisible(),true);assert.equal(await page.locator('#print').isVisible(),true);assert.equal(await page.locator('#image-actions').isVisible(),false);
+  await page.locator('#toggle-sidebar').click();assert.equal((await geometry()).mainLeft,0);
+  await page.locator('#toggle-sidebar').click();assert.equal((await geometry()).mainLeft,250);
+  // Keyboard-sized viewport: footer and controls stay inside the visible browser area.
+  await page.setViewportSize({width:390,height:400});await page.waitForFunction(()=>Math.abs(document.body.getBoundingClientRect().height-visualViewport.height)<2);
+  assert.equal((await geometry()).mainWidth,390);assert.equal(await page.locator('#web-sidebar').isVisible(),false);
+  await page.getByRole('button',{name:'插入表格',exact:true}).click();
+  await page.getByRole('button',{name:'插入',exact:true}).click();assert.equal(await page.locator('#editor table').count(),1);
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('#editor').focus();
+  await page.evaluate(()=>{
+   const canvas=document.createElement('canvas');canvas.width=240;canvas.height=140;canvas.getContext('2d').fillRect(0,0,240,140);
+   const r=document.createRange();r.selectNodeContents(document.getElementById('editor'));r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);
+   const clipboard=new DataTransfer();clipboard.setData('text/html',`<p><img alt="回归图片" src="${canvas.toDataURL()}"></p><p>图片后正文</p>`);
+   document.getElementById('editor').dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:clipboard}));
+  });
+  await page.locator('#editor img').click();assert.equal(await page.locator('#image-actions').isVisible(),true);
+  await page.keyboard.press('Escape');assert.equal(await page.locator('#image-actions').isVisible(),false);
   assert.deepEqual(errors,[]);
  }finally{await browser.close();}
 });

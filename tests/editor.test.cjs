@@ -263,6 +263,8 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]]){
    await t.test('images support selection, zoom, native clipboard and undoable cut',async()=>{
     const src=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=240;c.height=140;const ctx=c.getContext('2d');ctx.fillStyle='#e7f0ff';ctx.fillRect(0,0,240,140);ctx.fillStyle='#0d6efd';ctx.fillText('CNote image',30,70);return c.toDataURL('image/png');});
     await receive({type:'load',id:'image-note',title:'Images',html:`<p>Before</p><p><a href="https://example.com"><img src="${src}" alt="示例图片"></a></p><p>After</p>`});
+    assert.equal(await page.locator('#image-actions').isVisible(),false);
+    assert.equal(await page.locator('#image-selection').isVisible(),false);
     await page.locator('#editor img').click();
     assert.equal(await page.locator('#image-actions').isVisible(),true);
     assert.equal(await page.evaluate(()=>getSelection().getRangeAt(0).cloneContents().querySelectorAll('img').length),1);
