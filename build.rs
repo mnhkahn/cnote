@@ -27,8 +27,29 @@ fn main() {
             .flag("-fobjc-arc")
             .flag("-fblocks")
             .compile("cnote_updater");
+        // Rust's release linker disables Clang's default libraries. Objective-C
+        // @available checks need the availability helpers from compiler-rt.
+        let runtime = cc::Build::new()
+            .get_compiler()
+            .to_command()
+            .arg("--print-file-name=libclang_rt.osx.a")
+            .output()
+            .expect("locate Clang's macOS runtime");
+        assert!(runtime.status.success(), "locate Clang's macOS runtime");
+        let runtime = std::path::PathBuf::from(
+            String::from_utf8(runtime.stdout)
+                .expect("Clang runtime path")
+                .trim(),
+        );
+        assert!(runtime.is_file(), "Clang macOS runtime not found");
+        println!(
+            "cargo:rustc-link-search=native={}",
+            runtime.parent().unwrap().display()
+        );
+        println!("cargo:rustc-link-lib=static=clang_rt.osx");
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rustc-link-lib=framework=CoreServices");
         println!("cargo:rustc-link-lib=framework=Security");
         println!("cargo:rustc-link-lib=framework=UniformTypeIdentifiers");
     }

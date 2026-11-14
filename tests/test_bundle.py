@@ -53,6 +53,7 @@ class BundleTests(unittest.TestCase):
             path = pathlib.Path(folder) / 'Info.plist'
             subprocess.run(['python3', str(ROOT / 'scripts/bundle-info.py'), '--version', 'v1.2.3', '--arch', 'arm64', '--output', str(path)], check=True, capture_output=True)
             info = plistlib.loads(path.read_bytes())
+            self.assertEqual(info['LSMinimumSystemVersion'], '11.0')
             self.assertEqual(info['CFBundleIdentifier'], 'com.cyeam.cnote')
             self.assertEqual(info['CFBundleURLTypes'], [{
                 'CFBundleURLName': 'com.cyeam.cnote',

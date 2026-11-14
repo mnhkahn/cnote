@@ -190,9 +190,10 @@
   image.addEventListener('contextmenu',event=>{
    event.preventDefault();event.stopPropagation();
    root.querySelector('.trello-image-menu')?.remove();
-   const menu=node('div',null,'trello-image-menu');menu.setAttribute('popover','manual');menu.setAttribute('role','menu');
+   const menu=node('div',null,'trello-image-menu'),hasPopover=typeof menu.showPopover==='function';
+   if(hasPopover)menu.setAttribute('popover','manual');menu.setAttribute('role','menu');
    const listeners=new AbortController();
-   const closeMenu=()=>{listeners.abort();if(menu.matches(':popover-open'))menu.hidePopover();menu.remove();};
+   const closeMenu=()=>{listeners.abort();if(hasPopover&&menu.matches(':popover-open'))menu.hidePopover();menu.remove();};
    document.addEventListener('pointerdown',event=>{if(!menu.contains(event.target))closeMenu();},{capture:true,signal:listeners.signal});
    const save=button(saving?'正在下载原图…':'下载原图',async()=>{
     if(saving)return;closeMenu();saving=true;feedback('请选择图片保存位置…');
@@ -210,11 +211,11 @@
    const open=button('在页面中打开',()=>{closeMenu();openLink(attachment.url);});open.setAttribute('role','menuitem');
    menu.append(copy,share,open,save);
    menu.addEventListener('click',event=>event.stopPropagation());
-   (image.closest('dialog')||root).append(menu);menu.showPopover();
+   (image.closest('dialog')||root).append(menu);if(hasPopover)menu.showPopover();
    menu.style.left=Math.max(8,Math.min(event.clientX,innerWidth-menu.offsetWidth-8))+'px';
    menu.style.top=Math.max(8,Math.min(event.clientY,innerHeight-menu.offsetHeight-8))+'px';
    menu.addEventListener('keydown',event=>{event.stopPropagation();if(event.key==='Escape'){event.preventDefault();closeMenu();image.focus();}});
-   menu.addEventListener('toggle',()=>{if(!menu.matches(':popover-open'))closeMenu();});save.focus();
+   if(hasPopover)menu.addEventListener('toggle',()=>{if(!menu.matches(':popover-open'))closeMenu();});save.focus();
   });
  }
  function imageRecognition(attachment,cardId,epoch){

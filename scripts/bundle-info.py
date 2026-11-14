@@ -76,7 +76,7 @@ def main():
             }],
             "CFBundleIconFile": "AppIcon", "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version, "CFBundleVersion": version,
-            "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "11.0", "NSHighResolutionCapable": True,
         }
         key_file = pathlib.Path(__file__).resolve().parent.parent / "assets/update-public-key.txt"
         if not key_file.exists():

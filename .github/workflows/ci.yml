@@ -68,7 +68,7 @@ jobs:
         working-directory: cnote
         shell: bash
     env:
-      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4

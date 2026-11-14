@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <CoreServices/CoreServices.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 // This is a one-time offer for this feature, not a prompt on every release.
@@ -25,25 +26,39 @@ static void setTextDefaults(NSURL *application, NSArray<UTType *> *types, NSUInt
     }
     UTType *type = types[index];
     // Only ask the OS for types that are not already assigned to this app.
-    NSURL *current = [NSWorkspace.sharedWorkspace URLForApplicationToOpenContentType:type];
+    NSURL *current;
+    if (@available(macOS 12.0, *)) {
+        current = [NSWorkspace.sharedWorkspace URLForApplicationToOpenContentType:type];
+    } else {
+        current = CFBridgingRelease(LSCopyDefaultApplicationURLForContentType(
+            (__bridge CFStringRef)type.identifier, kLSRolesAll, NULL));
+    }
     if ([current.URLByResolvingSymlinksInPath isEqual:application.URLByResolvingSymlinksInPath]) {
         setTextDefaults(application, types, index + 1, failures, window);
         return;
     }
-    [NSWorkspace.sharedWorkspace setDefaultApplicationAtURL:application toOpenContentType:type
-        completionHandler:^(NSError *error) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (error) [failures addObject:type.identifier];
-                // A cancelled system confirmation ends the request; do not open more prompts.
-                if (([error.domain isEqualToString:NSOSStatusErrorDomain] && error.code == -128) ||
-                    ([error.domain isEqualToString:NSCocoaErrorDomain] &&
-                     [error.userInfo[NSUnderlyingErrorKey] code] == -128)) {
-                    setTextDefaults(application, types, types.count, failures, window);
-                } else {
-                    setTextDefaults(application, types, index + 1, failures, window);
-                }
-            });
-        }];
+    if (@available(macOS 12.0, *)) {
+        [NSWorkspace.sharedWorkspace setDefaultApplicationAtURL:application toOpenContentType:type
+            completionHandler:^(NSError *error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (error) [failures addObject:type.identifier];
+                    // A cancelled system confirmation ends the request; do not open more prompts.
+                    if (([error.domain isEqualToString:NSOSStatusErrorDomain] && error.code == -128) ||
+                        ([error.domain isEqualToString:NSCocoaErrorDomain] &&
+                         [error.userInfo[NSUnderlyingErrorKey] code] == -128)) {
+                        setTextDefaults(application, types, types.count, failures, window);
+                    } else {
+                        setTextDefaults(application, types, index + 1, failures, window);
+                    }
+                });
+            }];
+    } else {
+        NSString *identifier = [NSBundle bundleWithURL:application].bundleIdentifier;
+        OSStatus status = identifier ? LSSetDefaultRoleHandlerForContentType(
+            (__bridge CFStringRef)type.identifier, kLSRolesAll, (__bridge CFStringRef)identifier) : paramErr;
+        if (status != noErr) [failures addObject:type.identifier];
+        setTextDefaults(application, types, status == userCanceledErr ? types.count : index + 1, failures, window);
+    }
 }
 
 void cnote_default_apps_offer(void) {

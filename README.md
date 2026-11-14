@@ -4,7 +4,7 @@
 
 ## 使用与构建
 
-需要 macOS 14+、Xcode Command Line Tools、Rust 1.96+。支持 Apple Silicon 和 Intel。
+运行需要 macOS 11+，支持 Apple Silicon 和 Intel。编辑器需要 Safari 16.6.1 或更新版本提供的系统 WebKit；macOS 11 请先更新 Safari。编译另需 Xcode Command Line Tools 和 Rust 1.96+。
 
 ```sh
 cargo run --locked
@@ -99,7 +99,7 @@ open dist/CNote.app
 - `release.yml`：只有推送稳定版本标签（如 `v0.1.0`，也支持 `V0.1.0` / `0.1.0`）才发布，没有手动发布入口。编译前先检查签名密钥和版本号，再分别构建 Apple Silicon / Intel 应用；两者成功后创建 GitHub Release 并上传 ZIP、SHA-256、架构对应的签名 appcast。
 - 默认分支 push（或在默认分支手动运行 CI）还会为两种架构运行 Rust 测试和 Release 构建，预热发布所需的依赖缓存；发布任务使用相同的 shared key，只恢复缓存，避免保存下个标签无法复用的缓存。首次启用时需先等默认分支预热完成，再推送版本标签。此优化增加默认分支的构建用量，不改变 Release 优化参数；应用自身仍会重新编译，依赖或 Rust 工具链变化时也可能需要重新构建依赖。
 - `notify.yml`：CI / 发布流程失败或超时后，通过飞书发送原构建日志链接；发布成功发送版本下载链接。两种结果共用仓库 Secret `FEISHU_WEBHOOK_URL`，填入现有飞书群机器人的同一个 Webhook。通知流程独立于构建，按整次运行汇总，矩阵构建只通知一次；主动取消不通知。该工作流进入默认分支后生效，只执行默认分支的通知脚本。
-- Sparkle 2.10.0 按 SHA-256 固定下载；更新包和 appcast 都签名并在解压前验证。每小时自动检查，可在侧栏手动检查；安装/重启等待编辑缓冲落盘。自动更新仅在打包后的 `.app` 中启用。
+- Sparkle 2.9.6 按 SHA-256 固定下载；更新包和 appcast 都签名并在解压前验证。每小时自动检查，可在侧栏手动检查；安装/重启等待编辑缓冲落盘。自动更新仅在打包后的 `.app` 中启用。
 
 CNote 使用独立的 Ed25519 密钥：公钥位于 `assets/update-public-key.txt`；私钥保存在本机 Keychain 的 Sparkle 账号 `com.cyeam.cnote` 和仓库 Actions secret `SPARKLE_PRIVATE_KEY` 中。首次配置新仓库或恢复 secret 时，运行下面的脚本；脚本先核对公钥，再将原有私钥传给 GitHub，中间文件位于私有临时目录，退出时删除：
 

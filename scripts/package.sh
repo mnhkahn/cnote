@@ -10,6 +10,7 @@ python3 scripts/code-signing.py check
 sh scripts/prepare-sparkle.sh
 version=$(python3 scripts/bundle-info.py --version "${2:-}")
 export CNOTE_APP_VERSION="$version"
+export MACOSX_DEPLOYMENT_TARGET=11.0
 if [ "$profile" = "release" ]; then
     cargo build --release --locked
 elif [ "$profile" = "debug" ]; then
@@ -34,6 +35,8 @@ iconutil -c icns "$iconset" -o "$bundle/Contents/Resources/AppIcon.icns"
 arch=$(lipo -archs "$bundle/Contents/MacOS/CNote")
 python3 scripts/bundle-info.py --version "$version" --arch "$arch" --output "$bundle/Contents/Info.plist"
 mkdir -p "$bundle/Contents/Frameworks"
+# Avoid retaining signed resources from a previously bundled Sparkle version.
+rm -rf "$bundle/Contents/Frameworks/Sparkle.framework"
 ditto target/sparkle-sdk/Sparkle.framework "$bundle/Contents/Frameworks/Sparkle.framework"
 cp target/sparkle-sdk/LICENSE "$bundle/Contents/Resources/Sparkle-LICENSE.txt"
 cp LICENSE THIRD_PARTY_NOTICES.md assets/Bootstrap-Icons-LICENSE.txt "$bundle/Contents/Resources/"

@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-version=2.10.0
-checksum=c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c
+version=2.9.6
+checksum=52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192
 sdk=target/sparkle-sdk
 if [ -f "$sdk/.version" ] && [ "$(cat "$sdk/.version")" = "$version" ] && [ -x "$sdk/bin/generate_appcast" ]; then
     exit 0
@@ -14,5 +14,7 @@ if [ ! -f "$archive" ]; then
     mv "$archive.part" "$archive"
 fi
 printf '%s  %s\n' "$checksum" "$archive" | shasum -a 256 -c -
+# Replace the SDK instead of overlaying nibs and signed resources from another version.
+rm -rf "$sdk/Sparkle.framework" "$sdk/bin"
 tar -xf "$archive" -C "$sdk" Sparkle.framework bin LICENSE
 printf '%s\n' "$version" > "$sdk/.version"

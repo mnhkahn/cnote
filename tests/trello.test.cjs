@@ -116,6 +116,8 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  await page.getByRole('button',{name:'分享图片',exact:true}).click();
  await page.waitForFunction(()=>messages.filter(m=>m.op==='share_image').length===2);
  assert.deepEqual(await page.evaluate(()=>messages.filter(m=>m.op==='share_image').map(({id,attachment,name,image})=>({id,attachment,name,image}))),Array(2).fill({id:'card',attachment:'image',name:'附件图片',image:{mime:'image/png',base64:png}}));
+ // Safari 16 on Big Sur has dialogs but no Popover API.
+ await page.evaluate(()=>{HTMLElement.prototype.showPopover=undefined;HTMLElement.prototype.hidePopover=undefined;});
  await viewerImage.click({button:'right'});
  await page.getByRole('menuitem',{name:'复制图片',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('#trello-image-viewer > span[role=status]').textContent==='图片已复制');
