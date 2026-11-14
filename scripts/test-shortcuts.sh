@@ -4,10 +4,10 @@ cd "$(dirname "$0")/.."
 mkdir -p target
 clang -mmacosx-version-min=11.0 -Werror=unguarded-availability -fobjc-arc -fblocks -Wno-incompatible-pointer-types tests/default_apps_native.m -framework AppKit -framework UniformTypeIdentifiers -framework CoreServices -o target/default-apps-native-tests
 target/default-apps-native-tests
-clang -mmacosx-version-min=11.0 -Werror=unguarded-availability -fobjc-arc -fblocks tests/workspace_native.m -framework Foundation -framework AppKit -framework WebKit -framework Security -o target/workspace-native-tests
+clang -mmacosx-version-min=11.0 -Werror=unguarded-availability -fobjc-arc -fblocks tests/workspace_native.m -framework Foundation -framework AppKit -framework WebKit -framework Security -framework NetFS -framework CoreServices -o target/workspace-native-tests
 python3 scripts/test-native-failures.py target/workspace-native-tests
 clang -mmacosx-version-min=11.0 -Werror=unguarded-availability -fobjc-arc -fblocks tests/theme_native.m -framework Foundation -framework AppKit -o target/theme-native-tests
-clang -mmacosx-version-min=11.0 -Werror=unguarded-availability -fobjc-arc -fblocks tests/image_clipboard_native.m -framework Foundation -framework AppKit -framework WebKit -framework Security -o target/image-clipboard-native-tests
+clang -mmacosx-version-min=11.0 -Werror=unguarded-availability -fobjc-arc -fblocks tests/image_clipboard_native.m -framework Foundation -framework AppKit -framework WebKit -framework Security -framework NetFS -framework CoreServices -o target/image-clipboard-native-tests
 target/image-clipboard-native-tests
 if [ "${CNOTE_NATIVE_UI_TESTS:-}" = "1" ]; then
     target/theme-native-tests

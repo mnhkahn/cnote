@@ -26,6 +26,9 @@ pub enum Command {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    CloseFailed {
+        message: String,
+    },
     Drive {
         result: Value,
     },
@@ -33,6 +36,7 @@ pub enum Event {
         theme: Theme,
     },
     State {
+        finder_enabled: bool,
         cache_generation: u64,
         cache_account: String,
         intent: u64,
@@ -134,6 +138,7 @@ impl Engine {
     }
     fn state(&self) -> Result<()> {
         self.emit(Event::State {
+            finder_enabled: self.db.setting("finder_enabled")?.as_deref() == Some("true"),
             cache_generation: self.generation.load(Ordering::SeqCst),
             cache_account: self.account.clone(),
             intent: self.intent,
@@ -357,12 +362,19 @@ impl Engine {
         Ok(())
     }
     fn dispatch(&mut self, v: Value) -> Result<()> {
+        let closing = v["type"] == "close";
         let saving = v["type"] == "change";
         let tool_saving = v["type"] == "tool_save";
         let resolving = v["type"] == "resolve";
         let id = v["id"].as_str().unwrap_or_default().to_owned();
         let seq = v["seq"].as_u64().unwrap_or(0);
         match self.web(v) {
+            Err(error) if closing => {
+                self.emit(Event::CloseFailed {
+                    message: format!("{error:#}"),
+                });
+                Ok(())
+            }
             Err(err) if resolving => {
                 self.emit(Event::Dialog {
                     kind: "conflict_result".into(),
@@ -397,6 +409,14 @@ impl Engine {
             self.intent = self.intent.max(v["intent"].as_u64().unwrap_or(self.intent));
         }
         match v["type"].as_str().unwrap_or_default() {
+            "finder_setting" => self.db.set_setting(
+                "finder_enabled",
+                if v["enabled"] == true {
+                    "true"
+                } else {
+                    "false"
+                },
+            )?,
             "drive" => self.job(Job::Drive(v)),
             "tool_ready" => {
                 let state = self
@@ -650,6 +670,7 @@ impl Engine {
                 }
             }
             "close" => {
+                cloud::finder::disconnect()?;
                 self.db
                     .set_setting("selected", self.selected.as_deref().unwrap_or(""))?;
                 self.emit(Event::Closed);
@@ -685,6 +706,7 @@ impl Engine {
                 data: json!({"code":code,"url":url}),
             }),
             Reply::Account { id, name } => {
+                cloud::finder::account_changed(&id);
                 let changed = self.account != id;
                 if changed {
                     self.generation.fetch_add(1, Ordering::SeqCst);
@@ -712,6 +734,7 @@ impl Engine {
                 self.refresh();
             }
             Reply::LoggedOut => {
+                cloud::finder::account_changed("");
                 self.authenticated = false;
                 self.status = "离线模式 · 笔记保存在本机".into();
             }
@@ -986,6 +1009,30 @@ mod tests {
             prefetch_queue: VecDeque::new(),
             prefetching: None,
         }
+    }
+    #[test]
+    fn native_close_keeps_received_note_and_tool_drafts() {
+        let mut e = engine();
+        let note = e.db.create("Saved before close", "alice").unwrap();
+        e.selected = Some(note.id.clone());
+        let (tx, rx) = async_channel::unbounded();
+        e.events = tx;
+        e.dispatch(json!({"type":"change","id":note.id,"seq":1,"html":"<p>durable content</p>"}))
+            .unwrap();
+        e.dispatch(json!({"type":"tool_save","seq":1,"state":{"text":"durable tool"}}))
+            .unwrap();
+        e.dispatch(json!({"type":"close"})).unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), Event::Saved { .. }));
+        assert!(matches!(rx.try_recv().unwrap(), Event::ToolSaved { .. }));
+        assert!(matches!(rx.try_recv().unwrap(), Event::Closed));
+        assert_eq!(e.db.get(&note.id).unwrap().html, "<p>durable content</p>");
+        assert_eq!(e.db.setting("selected").unwrap(), Some(note.id));
+        assert!(
+            e.db.setting("tool_state")
+                .unwrap()
+                .unwrap()
+                .contains("durable tool")
+        );
     }
     #[test]
     fn tool_drafts_are_local_and_acknowledged_after_storage() {

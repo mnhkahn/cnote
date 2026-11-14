@@ -1,18 +1,22 @@
 'use strict';
 (() => {
  const root=document.getElementById('drive-tool');if(!root)return;
- root.innerHTML=`<div class="drive-heading"><div><h1>OneDrive</h1><p id="drive-account">你的云端文件</p></div><button id="drive-login">登录 OneDrive</button></div>
+ root.innerHTML=`<div class="drive-heading"><div><h1>OneDrive</h1><p id="drive-account">你的云端文件</p></div><div class="drive-toolbar"><button id="drive-finder" title="连接 Finder 云盘，打开文件时按需下载">在 Finder 中打开</button><button id="drive-eject" hidden>推出云盘</button><button id="drive-login">登录 OneDrive</button></div></div>
  <div class="drive-toolbar"><button id="drive-up" title="上一级 ⌘↑">↑</button><button id="drive-refresh" title="刷新 ⌘R">刷新</button><button id="drive-mkdir">新建文件夹</button><button id="drive-new">新建文本</button><button id="drive-upload">上传文件</button><input id="drive-files" type="file" multiple hidden><span class="spacer"></span><form id="drive-search-form"><input id="drive-search" type="search" placeholder="搜索此目录及子目录…" aria-label="搜索 OneDrive"><button>搜索</button></form></div>
  <nav id="drive-crumbs" aria-label="文件路径"></nav>
  <div class="drive-toolbar drive-selection"><span id="drive-selection">未选择</span><button id="drive-download">下载 / 复制 ⌘C</button><button id="drive-open">打开本地副本</button><button id="drive-edit">查看 / 编辑文本</button><button id="drive-rename">重命名 ↩</button><button id="drive-move">移动</button><button id="drive-delete">删除 ⌘⌫</button><span class="spacer"></span><select id="drive-sort" aria-label="文件排序"><option value="name">名称</option><option value="date">修改时间</option><option value="size">大小</option><option value="type">类型</option></select><button id="drive-order" aria-label="切换升降序">↑ 升序</button></div>
  <div id="drive-list" role="listbox" tabindex="0" aria-label="文件列表" aria-multiselectable="true"></div><p id="drive-status" role="status"></p>
  <dialog id="drive-dialog"><form method="dialog"><h2 id="drive-dialog-title"></h2><p id="drive-dialog-description"></p><input id="drive-dialog-name" aria-label="名称或目标路径"><textarea id="drive-dialog-text" aria-label="文件文本" spellcheck="false"></textarea><div class="drive-dialog-actions"><button value="cancel">取消</button><button value="ok" class="primary" id="drive-dialog-ok">确定</button></div></form></dialog>`;
  const $=id=>document.getElementById('drive-'+id),pending=new Map();
- let serial=0,version=0,items=[],folder=null,crumbs=[{id:'',name:'OneDrive'}],selected=new Set(),visible=[],anchor=-1,ascending=true,busy=false,loaded=false,authenticated=false,accountName='';
+ let serial=0,version=0,items=[],folder=null,crumbs=[{id:'',name:'OneDrive'}],selected=new Set(),visible=[],anchor=-1,ascending=true,busy=false,loaded=false,authenticated=false,accountName='',finderConnected=false,finderPending=false,finderAutoAttempted=false;
+ function finderRequest(op){if(finderPending)return;finderPending=true;$('finder').disabled=true;$('eject').disabled=true;status(op==='disconnect'?'正在推出 Finder 云盘…':'正在连接 Finder 云盘…');window.ipc.postMessage(JSON.stringify({type:'finder',op}));}
+ function finderResult(result){finderPending=false;if(result.error){status(result.error,true);}else{finderConnected=!!result.connected;status(finderConnected?'Finder 云盘已连接 · 打开文件时下载，保存会更新 OneDrive · 请保持 CNote 运行':'Finder 云盘已推出');}$('eject').hidden=!finderConnected;render();}
+ function finderPreference(enabled,open=false){if(enabled&&authenticated&&!finderAutoAttempted&&!finderConnected&&!finderPending){finderAutoAttempted=true;finderRequest(open?'open':'connect');}}
+ $('finder').onclick=()=>finderRequest('open');$('eject').onclick=()=>finderRequest('disconnect');
  function status(text,error=false){$('status').textContent=text;$('status').dataset.error=String(error);}
  function request(op,data={}){const request=++serial;return new Promise((resolve,reject)=>{pending.set(request,{resolve,reject});window.ipc.postMessage(JSON.stringify({type:'drive',request,op,...data}));});}
  function receive(event){const job=pending.get(event.request);if(!job)return;pending.delete(event.request);event.error?job.reject(Error(event.error)):job.resolve(event.data);}
- function account(value,name){const changed=authenticated!==value||accountName!==name;authenticated=value;accountName=name;$('account').textContent=value?name:'登录后管理你的 OneDrive 文件';$('login').hidden=value;if(changed){if($('dialog').open)$('dialog').close('cancel');for(const job of pending.values())job.reject(Error("OneDrive 账号已变化，请重试"));pending.clear();version++;items=[];folder=null;selected.clear();loaded=false;crumbs=[{id:'',name:'OneDrive'}];render();if(value&&window.cnoteTools?.workspace===5)refresh();}}
+ function account(value,name){const changed=authenticated!==value||accountName!==name;authenticated=value;accountName=name;$('account').textContent=value?name:'登录后管理你的 OneDrive 文件';$('login').hidden=value;if(changed){if(!value){finderAutoAttempted=false;finderConnected=false;$('eject').hidden=true;}if($('dialog').open)$('dialog').close('cancel');for(const job of pending.values())job.reject(Error("OneDrive 账号已变化，请重试"));pending.clear();version++;items=[];folder=null;selected.clear();loaded=false;crumbs=[{id:'',name:'OneDrive'}];render();if(value&&window.cnoteTools?.workspace===5)refresh();}}
  function parent(){return folder?.id||crumbs.at(-1).id;}
  function picked(){return items.filter(item=>selected.has(item.id));}
  function size(value){let n=Number(value)||0;for(const u of ['B','KB','MB','GB','TB']){if(n<1024||u==='TB')return (u==='B'?n:n.toFixed(1))+' '+u;n/=1024;}}
@@ -33,6 +37,7 @@
   for(const id of ['download','delete'])$(id).disabled=busy||!selected.size;
   for(const id of ['open','edit','rename','move'])$(id).disabled=busy||selected.size!==1||(id==='edit'&&!!picked()[0]?.folder);
   for(const id of ['mkdir','new','upload','refresh','search'])$(id).disabled=busy||!authenticated;
+  $('finder').disabled=finderPending||!authenticated;$('eject').disabled=finderPending;
   $('up').disabled=busy||crumbs.length<2;
   $('crumbs').replaceChildren();for(const [i,crumb]of crumbs.entries()){const button=document.createElement('button');button.textContent=crumb.name;button.disabled=busy;button.onclick=()=>navigate(crumbs.slice(0,i+1));$('crumbs').append(button);}
  }
@@ -80,5 +85,5 @@
   if(event.key===' '){event.preventDefault();edit();return;}
   if(['ArrowDown','ArrowUp'].includes(event.key)&&visible.length){event.preventDefault();anchor=Math.max(0,Math.min(visible.length-1,anchor+(event.key==='ArrowDown'?1:-1)));if(!event.shiftKey)selected.clear();selected.add(visible[anchor].id);render();$('list').querySelector(`[data-id="${CSS.escape(visible[anchor].id)}"]`)?.scrollIntoView({block:'nearest'});}
  });
- window.cnoteDrive={receive,account,refresh,shortcut,show(){render();if(!loaded)refresh();$('list').focus();}};
+ window.cnoteDrive={receive,account,finderResult,finderPreference,refresh,shortcut,show(){render();if(!loaded)refresh();$('list').focus();}};
 })();

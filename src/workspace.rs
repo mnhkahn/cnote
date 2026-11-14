@@ -79,6 +79,57 @@ impl Workspace {
     }
 }
 pub const SHORTCUT_SCRIPT: &str = include_str!("../editor/workspace.js");
+fn native_view(view: &wry::WebView) -> *mut std::ffi::c_void {
+    use wry::WebViewExtMacOS;
+    &*view.webview() as *const _ as *mut std::ffi::c_void
+}
+unsafe extern "C" {
+    fn cnote_web_host_attach(
+        view: *mut std::ffi::c_void,
+        context: *mut std::ffi::c_void,
+        event: extern "C" fn(*mut std::ffi::c_void, i32),
+        release: extern "C" fn(*mut std::ffi::c_void),
+    ) -> i32;
+    fn cnote_web_host_close(view: *mut std::ffi::c_void) -> i32;
+    fn cnote_web_host_cancel_close(view: *mut std::ffi::c_void);
+}
+extern "C" fn host_event(context: *mut std::ffi::c_void, event: i32) {
+    let sender = unsafe { &*context.cast::<async_channel::Sender<String>>() };
+    let message = if event == 0 {
+        r#"{"type":"refresh_workspace"}"#
+    } else {
+        r#"{"type":"native_close"}"#
+    };
+    let _ = sender.try_send(message.into());
+}
+extern "C" fn release_host(context: *mut std::ffi::c_void) {
+    unsafe {
+        drop(Box::from_raw(
+            context.cast::<async_channel::Sender<String>>(),
+        ));
+    }
+}
+pub fn attach_web_host(
+    view: &wry::WebView,
+    sender: async_channel::Sender<String>,
+) -> anyhow::Result<()> {
+    let context = Box::into_raw(Box::new(sender));
+    if unsafe { cnote_web_host_attach(native_view(view), context.cast(), host_event, release_host) }
+        == 0
+    {
+        release_host(context.cast());
+        anyhow::bail!("无法安装网页刷新与退出保护");
+    }
+    Ok(())
+}
+pub fn close_web_host(view: &wry::WebView) -> bool {
+    unsafe { cnote_web_host_close(native_view(view)) != 0 }
+}
+pub fn cancel_web_host_close(view: &wry::WebView) {
+    unsafe {
+        cnote_web_host_cancel_close(native_view(view));
+    }
+}
 pub fn copy_files(paths: &[serde_json::Value]) -> anyhow::Result<()> {
     let json = std::ffi::CString::new(serde_json::to_string(paths)?)?;
     unsafe extern "C" {
@@ -364,8 +415,8 @@ pub fn smoke_script(page: Workspace) -> String {
     let (ready, action, result) = match page {
         Workspace::Text => (
             "document.querySelector('#tool-text-editor .ace_text-input')",
-            "ace.edit('tool-text-editor').setValue('{\"id\":9007199254740993123}',-1);document.getElementById('text-preview').click();",
-            "(()=>{const apply=document.getElementById('text-apply');if(!apply.disabled)apply.click();return cnoteTools.state.text.includes('\\n')&&cnoteTools.state.text.includes('9007199254740993123');})()",
+            "ace.edit('tool-text-editor').setValue('{\"id\":9007199254740993123}',-1);document.querySelector('[data-text-op=\"format\"]').click();",
+            "cnoteTools.state.text.includes('\\n')&&cnoteTools.state.text.includes('9007199254740993123')",
         ),
         Workspace::Diff => (
             "document.querySelector('#tool-diff-right .ace_text-input')",

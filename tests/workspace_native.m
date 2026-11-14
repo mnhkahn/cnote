@@ -61,6 +61,10 @@ static void editKey(NSWindow *window, NSString *characters, BOOL shift) {
 }
 static unsigned int lastWorkspace = 99;
 static void ignoreWorkspace(unsigned int index) { lastWorkspace = index; }
+@interface CNoteTestWebView : WKWebView @end
+@implementation CNoteTestWebView @end
+static NSUInteger hostRefreshes, hostFallbackCloses;
+static void hostEvent(void *context, int event) { if (event == 0) hostRefreshes++; else hostFallbackCloses++; }
 static void navigationMatching(void) {
  unsigned short codes[]={123,124,125,126};
  unichar arrows[]={NSLeftArrowFunctionKey,NSRightArrowFunctionKey,NSDownArrowFunctionKey,NSUpArrowFunctionKey};
@@ -88,7 +92,7 @@ static void webEditing(void) {
  NSWindow *window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400)
   styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
  testWindow=window;
- WKWebView *view=[[WKWebView alloc] initWithFrame:window.contentView.bounds];
+ WKWebView *view=[[CNoteTestWebView alloc] initWithFrame:window.contentView.bounds];
  window.contentView=view;[window makeKeyAndOrderFront:nil];[window makeMainWindow];
  [NSApp activateIgnoringOtherApps:YES];[window makeKeyWindow];
  spin(^BOOL{return NSApp.mainWindow==window;});
@@ -226,6 +230,31 @@ static void webEditing(void) {
  spin(^BOOL{return [js(view,@"driveMessages.some(m=>m.op==='download'&&m.copy===true&&m.ids[0]==='file')") boolValue];});
  editKey(window,@"f",NO);
  spin(^BOOL{return [js(view,@"document.activeElement.id==='drive-search'") boolValue];});
+ step(@"Reload / intercept native methods and context-menu actions before navigation");
+ CHECK(cnote_web_host_attach((__bridge void *)view,NULL,hostEvent,NULL));
+ js(view,@"window.reloadSentinel=document.getElementById('drive-list');document.getElementById('drive-search').value='unsaved search'");
+ [view reload]; [view reloadFromOrigin];
+ [view performSelector:NSSelectorFromString(@"reload:") withObject:nil];
+ [view performSelector:NSSelectorFromString(@"reloadFromOrigin:") withObject:nil];
+ CHECK(hostRefreshes==4);
+ NSMenu *contextMenu=[NSMenu new];NSMenuItem *reload=[[NSMenuItem alloc] initWithTitle:@"Reload" action:NSSelectorFromString(@"reload:") keyEquivalent:@""];reload.target=view;[contextMenu addItem:reload];
+ [NSNotificationCenter.defaultCenter postNotificationName:NSMenuDidBeginTrackingNotification object:contextMenu];
+ CHECK([reload.title isEqualToString:@"刷新当前工作区"]);
+ [contextMenu performActionForItemAtIndex:0];CHECK(hostRefreshes==5);
+ CHECK([js(view,@"cnoteTools.workspace===5&&reloadSentinel===document.getElementById('drive-list')&&document.getElementById('drive-search').value==='unsaved search'") boolValue]);
+ step(@"Quit / healthy editor retains its save barrier");
+ js(view,@"window.nativeCloseCalls=0;window.cnote={action:()=>nativeCloseCalls++}");
+ CHECK(cnote_web_host_close((__bridge void *)view));
+ spin(^BOOL{return [js(view,@"nativeCloseCalls===1") boolValue];});
+ CHECK(hostFallbackCloses==0);
+ cnote_web_host_cancel_close((__bridge void *)view);
+ step(@"Quit / a blank document closes through the native backend callback");
+ [view loadHTMLString:@"<html><body></body></html>" baseURL:nil];
+ spin(^BOOL{return !view.loading;});
+ CHECK(cnote_web_host_close((__bridge void *)view));
+ spin(^BOOL{return hostFallbackCloses==1;});
+ CHECK(cnote_web_host_close((__bridge void *)view));
+ CHECK(hostFallbackCloses==1);
  [window orderOut:nil];
 }
 int main(int argc,const char **argv) {

@@ -3,6 +3,100 @@
 #import <Security/Security.h>
 #include <stdint.h>
 #include <string.h>
+#import <objc/runtime.h>
+
+@interface CNoteWebHost : NSObject
+@property(nonatomic, weak) WKWebView *view;
+@property(nonatomic) void *context;
+@property(nonatomic) void (*event)(void *, int);
+@property(nonatomic) void (*releaseContext)(void *);
+@property(nonatomic) BOOL closing;
+@property(nonatomic) NSUInteger closeGeneration;
+@property(nonatomic, strong) id menuObserver;
+- (void)requestClose;
+- (void)refreshWorkspace:(id)sender;
+@end
+@implementation CNoteWebHost
+- (void)dealloc { if (_menuObserver) [NSNotificationCenter.defaultCenter removeObserver:_menuObserver]; if (_releaseContext) _releaseContext(_context); }
+- (void)refreshWorkspace:(id)sender { if (self.event) self.event(self.context, 0); }
+- (void)requestClose {
+    if (self.closing) return;
+    self.closing = YES;
+    NSUInteger generation = ++self.closeGeneration;
+    __block BOOL answered = NO;
+    void (^fallback)(void) = ^{
+        if (answered || self.closeGeneration != generation) return;
+        answered = YES;
+        if (self.event) self.event(self.context, 1);
+    };
+    WKWebView *view = self.view;
+    if (!view) { fallback(); return; }
+    [view evaluateJavaScript:@"!!(window.cnote&&typeof cnote.action==='function')" completionHandler:^(id value, NSError *error) {
+        if (answered || self.closeGeneration != generation) return;
+        if (error || ![value boolValue]) fallback();
+        else {
+            // Finish the health probe before asking the editor to serialize
+            // large drafts. Saving itself must never be subject to the timer.
+            answered = YES;
+            [self.view evaluateJavaScript:@"cnote.action('close')" completionHandler:^(id value, NSError *error) {
+                if (error && self.closeGeneration == generation && self.event) self.event(self.context, 1);
+            }];
+        }
+    }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), fallback);
+}
+@end
+static const char webHostKey;
+static void guardContextMenu(NSMenu *menu, CNoteWebHost *host) {
+    for (NSMenuItem *item in menu.itemArray) {
+        // WebKit's context menu may dispatch straight to its page proxy instead
+        // of calling WKWebView.reload. Replace that actual menu action too.
+        if ([item.title isEqualToString:@"Reload"] || [item.title isEqualToString:@"重新载入"] || [item.title isEqualToString:@"重新加载"]) {
+            item.title = @"刷新当前工作区";
+            item.target = host;
+            item.action = @selector(refreshWorkspace:);
+        }
+        if (item.submenu) guardContextMenu(item.submenu, host);
+    }
+}
+static id cnoteHostReload(id view, SEL selector) {
+    CNoteWebHost *host = objc_getAssociatedObject(view, &webHostKey);
+    if (host.event) host.event(host.context, 0);
+    return nil;
+}
+static void cnoteHostReloadAction(id view, SEL selector, id sender) { cnoteHostReload(view, selector); }
+int cnote_web_host_attach(void *pointer, void *context, void (*event)(void *, int), void (*releaseContext)(void *)) {
+    if (!NSThread.isMainThread || !pointer || !event) return 0;
+    WKWebView *view = (__bridge WKWebView *)pointer;
+    if (objc_getAssociatedObject(view, &webHostKey)) return 0;
+    // Add overrides to the app-owned Wry class; changing an existing NSView's
+    // runtime class can invalidate AppKit/KVO storage used during layout.
+    Class base = object_getClass(view);
+    class_addMethod(base, @selector(reload), (IMP)cnoteHostReload, "@@:");
+    class_addMethod(base, @selector(reloadFromOrigin), (IMP)cnoteHostReload, "@@:");
+    class_addMethod(base, NSSelectorFromString(@"reload:"), (IMP)cnoteHostReloadAction, "v@:@");
+    class_addMethod(base, NSSelectorFromString(@"reloadFromOrigin:"), (IMP)cnoteHostReloadAction, "v@:@");
+    CNoteWebHost *host = [CNoteWebHost new];
+    host.view = view; host.context = context; host.event = event; host.releaseContext = releaseContext;
+    __weak CNoteWebHost *weakHost = host;
+    host.menuObserver = [NSNotificationCenter.defaultCenter addObserverForName:NSMenuDidBeginTrackingNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+        CNoteWebHost *host = weakHost;
+        if (host.view.window && host.view.window == NSApp.mainWindow && [note.object isKindOfClass:NSMenu.class]) guardContextMenu(note.object, host);
+    }];
+    objc_setAssociatedObject(view, &webHostKey, host, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return 1;
+}
+int cnote_web_host_close(void *pointer) {
+    if (!NSThread.isMainThread || !pointer) return 0;
+    CNoteWebHost *host = objc_getAssociatedObject((__bridge id)pointer, &webHostKey);
+    if (!host) return 0;
+    [host requestClose];
+    return 1;
+}
+void cnote_web_host_cancel_close(void *pointer) {
+    CNoteWebHost *host = pointer ? objc_getAssociatedObject((__bridge id)pointer, &webHostKey) : nil;
+    host.closing = NO; host.closeGeneration++;
+}
 
 // Each image export owns a fresh panel and keeps it alive until its callback.
 // Schedule presentation outside GPUI's update and attach it to the main window.
@@ -162,6 +256,62 @@ int cnote_copy_image(const unsigned char *bytes, size_t length, const char *html
 
 extern void cnote_theme_attach_menu(NSMenu *menu);
 
+// NetFS performs the mount outside the UI thread. The session password stays
+// in memory: it is never put in a URL, command argument, preferences or Keychain.
+#import <NetFS/NetFS.h>
+#import <CoreServices/CoreServices.h>
+#include <sys/mount.h>
+int cnote_finder_is_mounted(const char *directory) {
+    struct statfs info;
+    return directory && statfs(directory, &info) == 0 && strcmp(info.f_fstypename, "webdav") == 0;
+}
+int cnote_finder_sidebar(const char *directory, int add) {
+    @autoreleasepool {
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:directory] isDirectory:YES];
+        LSSharedFileListRef list = LSSharedFileListCreate(NULL, kLSSharedFileListFavoriteVolumes, NULL);
+        if (!list) return 0;
+        CFArrayRef items = LSSharedFileListCopySnapshot(list, NULL);
+        if (items) {
+            for (id object in (__bridge NSArray *)items) {
+                LSSharedFileListItemRef item = (__bridge LSSharedFileListItemRef)object;
+                CFTypeRef owned = LSSharedFileListItemCopyProperty(item, CFSTR("com.cyeam.cnote.finder"));
+                CFURLRef existing = NULL;
+                LSSharedFileListItemResolve(item, kLSSharedFileListNoUserInteraction | kLSSharedFileListDoNotMountVolumes, &existing, NULL);
+                BOOL matches = (owned && CFEqual(owned, kCFBooleanTrue)) || (existing && [[(__bridge NSURL *)existing path] isEqualToString:url.path]);
+                if (matches) LSSharedFileListItemRemove(list, item);
+                if (owned) CFRelease(owned);
+                if (existing) CFRelease(existing);
+            }
+            CFRelease(items);
+        }
+        int result = 1;
+        if (add) {
+            NSDictionary *properties = @{@"com.cyeam.cnote.finder":@YES, (__bridge NSString *)kLSSharedFileListItemHidden:@NO};
+            LSSharedFileListItemRef item = LSSharedFileListInsertItemURL(list, kLSSharedFileListItemLast,
+                CFSTR("CNote"), NULL, (__bridge CFURLRef)url, (__bridge CFDictionaryRef)properties, NULL);
+            result = item != NULL;
+            if (item) CFRelease(item);
+        }
+        CFRelease(list);
+        return result;
+    }
+}
+int cnote_finder_mount(const char *address, const char *directory, const char *password) {
+    @autoreleasepool {
+        NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:address]];
+        NSURL *mount = [NSURL fileURLWithPath:[NSString stringWithUTF8String:directory] isDirectory:YES];
+        NSMutableDictionary *options = [@{(__bridge NSString *)kNetFSAllowLoopbackKey:@YES,
+            (__bridge NSString *)kNAUIOptionKey:(__bridge NSString *)kNAUIOptionNoUI} mutableCopy];
+        NSMutableDictionary *mountOptions = [@{(__bridge NSString *)kNetFSMountAtMountDirKey:@YES} mutableCopy];
+        CFArrayRef points = NULL;
+        int result = NetFSMountURLSync((__bridge CFURLRef)url, (__bridge CFURLRef)mount,
+            CFSTR("cnote"), (__bridge CFStringRef)[NSString stringWithUTF8String:password],
+            (__bridge CFMutableDictionaryRef)options, (__bridge CFMutableDictionaryRef)mountOptions, &points);
+        if (points) CFRelease(points);
+        return result;
+    }
+}
+
 static id workspaceMonitor;
 int cnote_copy_files(const char *json) {
     if (![NSThread isMainThread] || !json) return 0;
@@ -311,6 +461,11 @@ int cnote_workspace_install(void (*callback)(unsigned int)) {
     workspaceCallback = callback;
     if (!workspaceMonitor) {
         workspaceMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
+            NSEventModifierFlags flags = event.modifierFlags;
+            if ((flags & NSEventModifierFlagCommand) && !(flags & (NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift)) && [event.charactersIgnoringModifiers.lowercaseString isEqualToString:@"q"]) {
+                WKWebView *view = focusedWebView(event);
+                if (view && cnote_web_host_close((__bridge void *)view)) return nil;
+            }
             NSInteger index = workspaceIndex(event);
             if (index >= 0 && event.window && event.window == NSApp.mainWindow && workspaceCallback) {
                 workspaceCallback((unsigned int)index);

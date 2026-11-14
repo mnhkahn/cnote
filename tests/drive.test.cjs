@@ -6,7 +6,7 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' On
   const page=await browser.newPage({viewport:{width:1250,height:850}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.setContent(`<script>
    window.messages=[];window.fixture=[{id:'folder',name:'Documents',folder:{},eTag:'f1'},{id:'b',name:'b.txt',size:10,eTag:'b1',lastModifiedDateTime:'2026-11-13T10:00:00Z'},{id:'a',name:'a.txt',size:20,eTag:'a1'}];
-   window.ipc={postMessage(raw){const m=JSON.parse(raw);messages.push(m);if(m.type==='workspace')cnoteTools.show(m.index);if(m.type==='tool_ready')setTimeout(()=>cnoteTools.receive({type:'tool_state',state:{}}),0);if(m.type!=='drive')return;
+   window.ipc={postMessage(raw){const m=JSON.parse(raw);messages.push(m);if(m.type==='workspace')cnoteTools.show(m.index);if(m.type==='tool_ready')setTimeout(()=>cnoteTools.receive({type:'tool_state',state:{}}),0);if(m.type==='finder'){setTimeout(()=>cnoteDrive.finderResult({connected:m.op!=='disconnect',path:'/mock/CNote'}),0);return;}if(m.type!=='drive')return;
     let data={changed:true};if(m.op==='list'||m.op==='search')data={folder:{id:m.parent||'root',folder:{}},items:m.parent==='folder'?[]:fixture};
     if(m.op==='read')data={item:fixture.find(x=>x.id===m.id),text:'original text'};
     if(m.op==='rename')fixture.find(x=>x.id===m.id).name=m.name;
@@ -61,6 +61,11 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(name+' On
   await page.waitForFunction(()=>!document.getElementById('drive-refresh').disabled);
   await page.locator('[data-id="b"]').click();await page.locator('#drive-open').click();
   await page.waitForFunction(()=>messages.some(x=>x.op==='download'&&x.open===true&&x.copy===false));
+  await page.waitForFunction(()=>!document.getElementById('drive-finder').disabled);
+  await page.locator('#drive-finder').click();await page.waitForFunction(()=>messages.some(x=>x.type==='finder'&&x.op==='open'));
+  await page.locator('#drive-eject').waitFor({state:'visible'});await page.locator('#drive-eject').click();
+  await page.waitForFunction(()=>messages.some(x=>x.type==='finder'&&x.op==='disconnect'));
+  await page.locator('#drive-eject').waitFor({state:'hidden'});
   await page.screenshot({path:'/tmp/cnote-drive-'+name+'.png'});
   assert.deepEqual(errors,[]);
  }finally{await browser.close();}

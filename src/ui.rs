@@ -102,6 +102,13 @@ impl Notebook {
             .replace("/* THEME_CATALOG */ []", crate::theme::CATALOG)
             .replace("/* TOOL_SCRIPT */", include_str!("../tools/tools.js"))
             .replace("/* SCRIPT */", include_str!("../editor/editor.js"));
+        // loadHTMLString has an about:blank URL. A WebKit context-menu Reload
+        // navigates to an empty document, so route it through workspace refresh
+        // after the editor's ready handshake instead of unloading live drafts.
+        let document_ready = Rc::new(Cell::new(false));
+        let navigation_ready = document_ready.clone();
+        let navigation_tx = ipc_tx.clone();
+        let host_tx = ipc_tx.clone();
         let view = wry::WebViewBuilder::new()
             .with_html(html)
             .with_devtools(cfg!(debug_assertions))
@@ -110,14 +117,26 @@ impl Notebook {
                 position: wry::dpi::LogicalPosition::new(280., 0.).into(),
                 size: wry::dpi::LogicalSize::new(900., 750.).into(),
             })
-            .with_navigation_handler(|url| url == "about:blank" || url.starts_with("blob:null/"))
+            .with_navigation_handler(move |url| {
+                if url == "about:blank" && navigation_ready.get() {
+                    let _ = navigation_tx.try_send(r#"{"type":"refresh_workspace"}"#.into());
+                    return false;
+                }
+                url == "about:blank" || url.starts_with("blob:null/")
+            })
             .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
             .with_ipc_handler(move |request| {
+                if request.body() == r#"{"type":"ready"}"# {
+                    document_ready.set(true);
+                }
                 let _ = ipc_tx.try_send(request.into_body());
             })
             .build_as_child(window);
         let (view, error) = match view {
-            Ok(v) => (Some(Rc::new(v)), None),
+            Ok(v) => match workspace::attach_web_host(&v, host_tx) {
+                Ok(()) => (Some(Rc::new(v)), None),
+                Err(error) => (None, Some(error.to_string())),
+            },
             Err(e) => (None, Some(format!("富文本编辑器无法启动：{e}"))),
         };
         if let Some(error) = error {
@@ -156,7 +175,7 @@ impl Notebook {
                 if this.close_allowed {
                     return true;
                 }
-                this.action("close", json!({}));
+                this.request_close();
                 false
             })
             .unwrap_or(true)
@@ -165,7 +184,7 @@ impl Notebook {
             this.quitting = true;
             let ready = this.close_allowed || this.view.is_none();
             if !ready {
-                this.action("close", json!({}));
+                this.request_close();
             }
             let rx = this.close_rx.clone();
             async move {
@@ -335,6 +354,25 @@ impl Notebook {
         }
     }
     fn deliver(&self, event: Event, cx: &mut Context<Self>) {
+        if let Event::State {
+            account,
+            authenticated,
+            finder_enabled,
+            ..
+        } = &event
+        {
+            self.js(&format!(
+                "window.cnoteDrive?.account({},{})",
+                authenticated,
+                json!(account)
+            ));
+            let open_finder = std::env::args_os().any(|arg| arg == "--finder");
+            self.js(&format!(
+                "window.cnoteDrive?.finderPreference({},{})",
+                *finder_enabled || open_finder,
+                open_finder
+            ));
+        }
         if matches!(&event, Event::Load { .. }) {
             let generation = self.cache_generation;
             let smoke_load = smoke() && matches!(&event, Event::Load { id, .. } if !id.is_empty());
@@ -376,6 +414,19 @@ impl Notebook {
             json!(kind),
             data
         ));
+    }
+    pub fn request_close(&self) {
+        if self.close_allowed {
+            return;
+        }
+        if self
+            .view
+            .as_ref()
+            .is_some_and(|view| workspace::close_web_host(view))
+        {
+            return;
+        }
+        let _ = self.tx.send(Command::Web(json!({"type":"close"})));
     }
     fn verify_smoke_layout(&self) {
         let (x, y, width, height) = self.web_bounds.get().expect("editor layout");
@@ -530,6 +581,70 @@ impl Notebook {
                 })
                 .detach();
             }
+            "finder" => {
+                let disconnect = v["op"] == "disconnect";
+                let open = v["op"] == "open";
+                let tx = self.tx.clone();
+                cx.spawn(async move |this, cx| {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            if disconnect {
+                                crate::cloud::finder::disconnect()?;
+                                Ok::<_, anyhow::Error>(None)
+                            } else {
+                                crate::cloud::finder::connect().map(Some)
+                            }
+                        })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        let result = match result {
+                            Ok(path) => {
+                                let connected = path.is_some();
+                                let _ = tx.send(Command::Web(
+                                    json!({"type":"finder_setting","enabled":connected}),
+                                ));
+                                if open
+                                    && let Some(path) = &path
+                                    && let Ok(url) = url::Url::from_file_path(path)
+                                {
+                                    cx.open_url(url.as_str());
+                                }
+                                json!({"connected":connected,"path":path})
+                            }
+                            Err(error) => json!({"error":error.to_string()}),
+                        };
+                        this.js(&format!("window.cnoteDrive?.finderResult({result})"));
+                    });
+                })
+                .detach();
+            }
+            "request_close" => self.request_close(),
+            "native_close" => {
+                if self.note_dirty || self.tool_dirty {
+                    let prompt = window.prompt(
+                        PromptLevel::Warning,
+                        "编辑器未响应",
+                        Some("已保存的内容会保留，但无法确认尚未保存的修改。是否退出 CNote？"),
+                        &["取消", "退出"],
+                        cx,
+                    );
+                    cx.spawn(async move |this, cx| {
+                        let answer = prompt.await;
+                        let _ = this.update(cx, |this, _| {
+                            if matches!(answer, Ok(1)) {
+                                let _ = this.tx.send(Command::Web(json!({"type":"close"})));
+                            } else if let Some(view) = &this.view {
+                                workspace::cancel_web_host_close(view);
+                            }
+                        });
+                    })
+                    .detach();
+                } else {
+                    let _ = self.tx.send(Command::Web(json!({"type":"close"})));
+                }
+            }
+            "native_blank_quit" if smoke() => self.request_close(),
             "refresh_workspace" => self.refresh_workspace(),
             "workspace" => {
                 if let Some(page) = Workspace::from_message(&v.to_string()) {
@@ -552,6 +667,10 @@ impl Notebook {
                 let _ = self.tx.send(Command::Web(v));
                 if smoke() {
                     eprintln!("CNOTE_SMOKE_READY");
+                    if std::env::var_os("CNOTE_BLANK_QUIT_TEST").is_some() {
+                        self.js("window.cnote=undefined;window.cnoteTools=undefined;document.body.replaceChildren();window.ipc.postMessage(JSON.stringify({type:'native_blank_quit'}))");
+                        return;
+                    }
                     if std::env::var_os("CNOTE_IMAGE_SAVE_TEST").is_some() {
                         use base64::Engine;
                         let image = base64::engine::general_purpose::STANDARD
@@ -847,6 +966,28 @@ impl Notebook {
         }
         let mut redraw = false;
         match &event {
+            Event::CloseFailed { message } => {
+                if let Some(view) = &self.view {
+                    workspace::cancel_web_host_close(view);
+                }
+                // A dead/blank web page cannot present the normal in-page error.
+                let prompt = _window.prompt(
+                    PromptLevel::Warning,
+                    "CNote 暂时无法退出",
+                    Some(message),
+                    &["知道了"],
+                    cx,
+                );
+                cx.spawn(async move |_, _| {
+                    let _ = prompt.await;
+                })
+                .detach();
+            }
+            Event::SaveFailed { .. } | Event::ToolSaveFailed { .. } => {
+                if let Some(view) = &self.view {
+                    workspace::cancel_web_host_close(view);
+                }
+            }
             Event::Theme { theme } => self.apply_theme(*theme, cx),
             Event::State {
                 notes,
@@ -862,11 +1003,6 @@ impl Notebook {
                 self.selected = selected.clone();
                 self.account = account.clone();
                 self.authenticated = *authenticated;
-                self.js(&format!(
-                    "window.cnoteDrive?.account({},{})",
-                    authenticated,
-                    json!(account)
-                ));
             }
             Event::Selected { id, intent } => {
                 self.intent = self.intent.max(*intent);
@@ -888,7 +1024,7 @@ impl Notebook {
                     redraw = true;
                 }
             }
-            Event::Error { .. } | Event::SaveFailed { .. } => {}
+            Event::Error { .. } => {}
             Event::Closed => {
                 if smoke() {
                     eprintln!("CNOTE_SMOKE_SAVED");

@@ -208,7 +208,7 @@ pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
     });
     cx.on_action(move |_: &Quit, cx| {
         cx.defer(move |cx| {
-            let _ = window.update(cx, |v, _, _| v.action("close", json!({})));
+            let _ = window.update(cx, |v, _, _| v.request_close());
         });
     });
     cx.on_action(move |_: &NewNote, cx| {

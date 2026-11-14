@@ -20,6 +20,7 @@ const GRAPH: &str = "https://graph.microsoft.com/v1.0";
 const CLIENT_ID: &str = "e1f582c1-1568-4347-8c5b-1906164e637f";
 const SCOPES: &str = "Files.ReadWrite User.Read offline_access";
 mod drive;
+pub mod finder;
 #[derive(Debug)]
 pub enum Job {
     Drive(serde_json::Value),

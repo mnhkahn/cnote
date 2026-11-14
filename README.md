@@ -76,13 +76,25 @@ open dist/CNote.app
 
 真实上报检查：`cargo test --locked analytics::tests::live_sdk_capture -- --ignored --exact --nocapture`。该检查默认跳过，手动运行时仅发送带 `integration_test=true` 的诊断事件，不计入正式日报；输出诊断安装 ID，便于在 PostHog 确认入库。
 
+右键菜单的“刷新当前工作区”与 `⌘R` 一致，不卸载内存中的编辑页面。`⌘Q`、退出菜单和关闭窗口由原生层处理：健康编辑器仍等待笔记及工具草稿保存；页面丢失或两秒内没有健康应答时改由后端确认退出，已接收的保存请求先完成。若此时仍标记有未保存修改，会用系统对话框确认；Finder 云盘无法安全卸载时也用系统对话框说明原因，网页白屏不会再吞掉退出错误。
+
 ## OneDrive 文件管理
 
 `⌘6` 打开完整的 OneDrive 根目录，复用笔记的 Microsoft 登录。支持进入子目录、面包屑导航、新建文件夹和文本文件、批量上传、重命名、移动、删除、搜索当前目录及子目录，以及按名称、修改时间、类型、大小升降序排列（文件夹始终在前）。云端目录自动读取所有分页；删除前显示确认，删除、改名、移动和文本保存携带 ETag，版本变化时失败并保留云端内容。接口采用 [Microsoft Graph driveItem](https://learn.microsoft.com/en-us/graph/api/resources/driveitem?view=graph-rest-1.0)。
 
 点击选择，Command 点击多选，Shift 点击连续选择；`⌘A` 全选，方向键移动选择，`⌘F` 搜索，`⌘R` 刷新，`⌘↑` 返回上一级，回车进入文件夹或重命名，`⌘⌫` 删除。选中文件或文件夹按 `⌘C`，后台下载完成后把本地文件 URL 放入系统剪贴板，可在 Finder 中 `⌘V` 粘贴。目录递归下载，每批保存到系统下载目录下独立的 `OneDrive-<唯一编号>` 目录，失败时清理临时文件；文件名保持原样，避免覆盖本地文件。输入框和弹窗中的复制保留普通文本行为。
 
-双击文件或点击“打开本地副本”先下载，再通过系统默认应用打开；本地副本的修改需要重新上传。内置“查看 / 编辑文本”（空格键）支持 2 MB 以内的 UTF-8 文本并可保存到 OneDrive；新建和上传每个文件上限 20 MB，同名上传失败，不自动覆盖。下载采用流式写入，每次最多选中 500 项，目录最多 100 层。该视图按需访问云端，不提供系统挂载、离线目录同步或后台自动上传；所有 OneDrive 操作需要网络。
+双击文件或点击“打开本地副本”先下载，再通过系统默认应用打开；本地副本的修改需要重新上传。内置“查看 / 编辑文本”（空格键）支持 2 MB 以内的 UTF-8 文本并可保存到 OneDrive；新建和上传每个文件上限 20 MB，同名上传失败，不自动覆盖。下载采用流式写入，每次最多选中 500 项，目录最多 100 层。该视图按需访问云端；Finder 云盘入口见下节。所有 OneDrive 操作需要网络。
+
+## Finder 云盘
+
+在 `⌘6` 的 OneDrive 页点击“在 Finder 中打开”，系统会挂载名为 **CNote** 的云盘，并固定到 Finder 侧栏中访问。目录来自你的 OneDrive，列目录只读取元数据；打开、复制或预览文件时才下载内容。支持 Finder 中的文件复制、写入、新建文件夹、改名、移动和删除；文件保存会回传 OneDrive，版本变化时返回冲突而不是静默覆盖。Finder 自动生成的 `.DS_Store`、AppleDouble 等辅助文件只保存在 CNote 本机数据目录，避免浏览云盘时向 OneDrive 上传系统杂项。
+
+此入口使用 [macOS 自带的 WebDAV 文件系统](https://support.apple.com/guide/mac-help/connect-disconnect-a-webdav-server-mac-mchlp1546/mac)，显示为网络云盘；没有 File Provider 的离线同步及云朵状态标记。CNote 必须保持运行。首次成功连接后记录启用状态，下次登录恢复时自动重连；也可用应用可执行文件的 `--finder` 参数启动并打开云盘。在 Finder 推出或在 CNote 点击“推出云盘”即可断开；退出 CNote 会尝试卸载，若文件仍被占用则提示先关闭文件，避免中断正在保存的内容。
+
+文件服务仅监听本机 `127.0.0.1`，每次运行生成独立随机口令，通过系统 NetFS API 传递；口令不进入 URL、命令参数、日志或磁盘。OneDrive 凭据仍由应用的系统钥匙串管理。退出登录或切换账号会禁用旧云盘访问并尝试卸载，不会把旧账号目录切成新账号内容。Finder 上传从临时文件流式发送，超过 250 MB 使用 Graph 分段上传；原 `⌘6` 页面仍保留单文件 20 MB 上传限制。
+
+回归检查：`cargo test cloud::finder`；真实 macOS 挂载检查使用隔离的模拟服务，不操作 OneDrive：`cargo test cloud::finder::tests::native_finder_lazy_mount -- --ignored --exact --nocapture`，覆盖挂载、元数据枚举不下载、读取、写入、改名、删除和文件夹操作。
 
 ## 本地工具
 
@@ -166,6 +178,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 sh scripts/test-updater.sh
 sh scripts/test-shortcuts.sh
+python3 scripts/test-blank-quit.py # 完整应用的白屏退出检查（先构建 debug）
 CNOTE_NATIVE_UI_TESTS=1 sh scripts/test-shortcuts.sh # 真实菜单悬停预览、WKWebView 编辑快捷键、方向键和 Shift 选择（需要图形会话）
 python3 -m unittest discover -s tests -p 'test_*.py'
 npm ci
