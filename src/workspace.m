@@ -302,7 +302,12 @@ int cnote_finder_mount(const char *address, const char *directory, const char *p
         NSURL *mount = [NSURL fileURLWithPath:[NSString stringWithUTF8String:directory] isDirectory:YES];
         NSMutableDictionary *options = [@{(__bridge NSString *)kNetFSAllowLoopbackKey:@YES,
             (__bridge NSString *)kNAUIOptionKey:(__bridge NSString *)kNAUIOptionNoUI} mutableCopy];
-        NSMutableDictionary *mountOptions = [@{(__bridge NSString *)kNetFSMountAtMountDirKey:@YES} mutableCopy];
+        // Finder gets an explicit CNote sidebar item from cnote_finder_sidebar.
+        // Do not also advertise the loopback mount as a connected server.
+        NSMutableDictionary *mountOptions = [@{
+            (__bridge NSString *)kNetFSMountAtMountDirKey:@YES,
+            (__bridge NSString *)kNetFSMountFlagsKey:@(MNT_DONTBROWSE)
+        } mutableCopy];
         CFArrayRef points = NULL;
         int result = NetFSMountURLSync((__bridge CFURLRef)url, (__bridge CFURLRef)mount,
             CFSTR("cnote"), (__bridge CFStringRef)[NSString stringWithUTF8String:password],
