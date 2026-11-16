@@ -1,4 +1,6 @@
 //! Native Trello API client. User credentials live only in Keychain.
+#[path = "trello_review.rs"]
+mod review;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use reqwest::{StatusCode, blocking::Client};
@@ -127,7 +129,7 @@ impl Api {
         query: &[(&str, &str)],
         body: Option<&Value>,
     ) -> Result<Value> {
-        let writing = method == reqwest::Method::PUT;
+        let writing = method != reqwest::Method::GET;
         // Credentials stay out of request URLs, logs and errors.
         let authorization = format!(
             "OAuth oauth_consumer_key=\"{}\", oauth_token=\"{}\"",
@@ -148,12 +150,10 @@ impl Api {
             .send()
             .map_err(|_| anyhow::anyhow!("无法连接 Trello，请检查网络后重试"))?;
         match response.status() {
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN if writing => bail!(
-                "Trello 拒绝写入，请在关联设置中重新授权读写权限；若仍可查看卡片，请检查是否使用了旧的只读授权，并确认你有看板编辑权限"
-            ),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN if writing => return Err(WriteRejected("Trello 拒绝写入，请在关联设置中重新授权读写权限；若仍可查看卡片，请检查是否使用了旧的只读授权，并确认你有看板编辑权限".into()).into()),
             StatusCode::UNAUTHORIZED => return Err(AuthRequired.into()),
             StatusCode::FORBIDDEN => bail!("没有权限读取此 Trello 内容，请检查授权或选择其他看板"),
-            StatusCode::TOO_MANY_REQUESTS => bail!("Trello 请求过于频繁，请稍后重试"),
+            StatusCode::TOO_MANY_REQUESTS => return Err(WriteRejected("Trello 请求过于频繁，请稍后重试".into()).into()),
             status if !status.is_success() => {
                 bail!("Trello 请求失败（HTTP {}），请稍后重试", status.as_u16())
             }
@@ -169,6 +169,15 @@ impl Api {
         serde_json::from_slice(&bytes).context("Trello 响应格式错误")
     }
 }
+#[derive(Debug)]
+struct WriteRejected(String);
+impl std::fmt::Display for WriteRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for WriteRejected {}
+
 fn preview_mime(attachment: &Value) -> Option<&str> {
     let mime = attachment["mimeType"]
         .as_str()
@@ -430,7 +439,7 @@ pub fn request(v: Value) -> Result<Value> {
             return Ok(json!({"connected":false}));
         }
         "boards" | "board" | "card" | "attachment" | "recognize_image" | "transcribe_audio"
-        | "update_cell" | "review_homework" | "reading_source" => {}
+        | "update_cell" | "review_homework" | "publish_homework" | "reading_source" => {}
         _ => bail!("未知的 Trello 操作"),
     }
     let api = Api::new(session.auth()?.ok_or(AuthRequired)?)?;
@@ -478,8 +487,10 @@ pub fn request(v: Value) -> Result<Value> {
             };
             Ok(json!({"card":api.put(&format!("/cards/{id}"), &body)?}))
         }
+        "review_homework" => review::review(&api, &v),
+        "publish_homework" => review::retry(&api, &v),
         "reading_source" => crate::homework::reading_source(v["link"].as_str().unwrap_or_default()),
-        "attachment" | "recognize_image" | "transcribe_audio" | "review_homework" => {
+        "attachment" | "recognize_image" | "transcribe_audio" => {
             let card = identifier(&v)?;
             let id = v["attachment"].as_str().unwrap_or("");
             anyhow::ensure!(
@@ -491,16 +502,9 @@ pub fn request(v: Value) -> Result<Value> {
             let data = api.attachment(
                 card,
                 id,
-                transcribe
-                    || recognize
-                    || v["op"] == "review_homework"
-                    || v["original"].as_bool().unwrap_or(false),
+                transcribe || recognize || v["original"].as_bool().unwrap_or(false),
             )?;
-            if v["op"] == "review_homework" {
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(data["base64"].as_str().context("附件数据缺失")?)?;
-                crate::homework::review(&v, bytes, data["mime"].as_str().context("附件格式缺失")?)
-            } else if recognize {
+            if recognize {
                 let mime = data["mime"].as_str().context("图片格式缺失")?;
                 anyhow::ensure!(mime.starts_with("image/"), "此附件不是图片");
                 let bytes = base64::engine::general_purpose::STANDARD
@@ -531,7 +535,7 @@ pub fn request(v: Value) -> Result<Value> {
                 &[("filter", "all"), ("limit", "1000")],
             );
             Ok(
-                json!({"card":card,"attachments":attachments.as_ref().ok(),"actions":actions.as_ref().ok(),"partial":attachments.is_err()||actions.is_err()}),
+                json!({"card":card,"attachments":attachments.as_ref().ok(),"actions":actions.as_ref().ok(),"partial":attachments.is_err()||actions.is_err(),"homework_review":review::latest(id).ok().flatten()}),
             )
         }
         _ => unreachable!(),

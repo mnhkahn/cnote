@@ -18,20 +18,20 @@ def notification(event):
         return None
     release = name == "Release macOS packages"
     if result in {"failure", "timed_out"}:
-        title = "CNote 发布失败" if release else "CNote 编译 / 测试失败"
+        title = "❌ CNote 发布失败" if release else "❌ CNote 编译 / 测试失败"
         if result == "timed_out":
-            title += "（超时）"
+            title += " ⏱️（超时）"
     elif release and result == "success":
-        title = "CNote 新版本编译并发布成功"
+        title = "✅ CNote 新版本编译并发布成功"
     else:
         return None
     repository = event["repository"]
-    lines = [title, f"流程：{name}", f"分支 / 标签：{run['head_branch']}",
-             f"提交：{run['head_sha'][:7]}", f"运行次数：{run.get('run_attempt', 1)}"]
+    lines = [title, f"⚙️ 流程：{name}", f"🏷️ 分支 / 标签：{run['head_branch']}",
+             f"📝 提交：{run['head_sha'][:7]}", f"🔄 运行次数：{run.get('run_attempt', 1)}"]
     if release and result == "success":
         tag = urllib.parse.quote(run["head_branch"], safe="")
-        lines.append(f"下载地址：{repository['html_url']}/releases/tag/{tag}")
-    lines.append(f"构建日志：{run['html_url']}")
+        lines.append(f"📦 下载地址：{repository['html_url']}/releases/tag/{tag}")
+    lines.append(f"📋 构建日志：{run['html_url']}")
     return {"msg_type": "text", "content": {"text": "\n".join(lines)}}
 
 

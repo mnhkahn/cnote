@@ -13,7 +13,7 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' a
    {id:'missing',name:'口算缺少附件',desc:'',idList:'todo'}
   ];cards.forEach(c=>c.due=new Date().toISOString());
   window.ipc={postMessage(raw){const m=JSON.parse(raw);messages.push(m);if(m.type==='workspace')cnoteTools.show(m.index);if(m.type==='tool_ready')setTimeout(()=>cnoteTools.receive({type:'tool_state',state:{trelloBoard:'board'}}),0);if(m.type!=='trello')return;
-  if(m.op==='review_homework'){window.reviewRequest=m;return;}
+  if(m.op==='review_homework'){window.reviewRequest=m;return;}if(m.op==='publish_homework'){window.publishRequest=m;return;}
   const c=cards.find(c=>c.id===m.id);const data=m.op==='status'?{connected:true}:m.op==='boards'?{boards:[{id:'board',name:'Board'}]}:m.op==='board'?{lists:[{id:'todo',name:'待完成'}],cards}:m.op==='reading_source'?{reference:'From textbook.\\nSecond line.'}:m.op==='card'?{card:c,attachments:c.id==='missing'?[]:[{id:'old',name:'old.png',mimeType:'image/png',isUpload:true,date:'2026-01-01'},{id:'latest',name:'latest.png',mimeType:'image/png',isUpload:true,date:'2026-02-01'},{id:'audio',name:'reading.m4a',mimeType:'audio/mp4',isUpload:true}],actions:[]}:{mime:'text/plain',base64:'aGk='};setTimeout(()=>cnoteTrello.receive({request:m.request,data}),0);}};
   </script>`+html);
   await page.keyboard.press('Meta+5');
@@ -25,8 +25,14 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' a
   assert(await page.getByRole('button',{name:'开始自动阅卷'}).isDisabled());
   await page.evaluate(()=>cnoteTrello.receive({request:reviewRequest.request,error:'服务忙'}));await page.getByText('批改失败：服务忙',{exact:true}).waitFor();
   await page.getByRole('button',{name:'开始自动阅卷'}).click();
-  await page.evaluate(()=>cnoteTrello.receive({request:reviewRequest.request,data:{input:{kind:'arithmetic'},report:{grade:'优',correct:19,incorrect:1,pending:0,total:20,accuracy:95,items:[{number:1,expression:'2+2',raw:'<img src=x>',status:'incorrect',hint:'请重新计算'}]}}}));
-  await page.getByText('批改完成',{exact:true}).waitFor();assert.equal(await page.locator('.trello-homework-result img').count(),0);assert.match(await page.locator('.trello-homework-result').textContent(),/需订正/);
+  await page.evaluate(()=>cnoteTrello.receive({request:reviewRequest.request,data:{published:false,review_id:'review-math',publication_error:'写入失败',input:{kind:'arithmetic'},report:{grade:'优',correct:19,incorrect:1,pending:0,total:20,accuracy:95,items:[{number:1,expression:'2+2',raw:'<img src=x>',status:'incorrect',hint:'请重新计算'}]}}}));
+  await page.getByText('阅卷已完成，结果尚未提交：写入失败',{exact:true}).waitFor();
+  assert(await page.getByRole('button',{name:'开始自动阅卷'}).isDisabled());
+  await page.getByRole('button',{name:'重试提交结果'}).click();assert.equal(await page.evaluate(()=>publishRequest.review_id),'review-math');
+  assert.equal(await page.evaluate(()=>messages.filter(m=>m.op==='review_homework').length),2);
+  await page.evaluate(()=>cnoteTrello.receive({request:publishRequest.request,data:{published:true,review_id:'review-math',card:{id:'math',idList:'fix',desc:'打分结果：优\n类型：普通作业\n作业内容：完成练习册',dueComplete:false},input:{kind:'arithmetic'},report:{grade:'优',correct:19,incorrect:1,pending:0,total:20,accuracy:95,items:[]}}}));
+  await page.getByText('批改结果已提交到 Trello',{exact:true}).waitFor();assert.match(await page.locator('.trello-card-status').textContent(),/待改错/);assert.match(await page.locator('.trello-description').textContent(),/打分结果：优/);
+  assert.equal(await page.locator('.trello-homework-result img').count(),0);assert.match(await page.locator('.trello-homework-result').textContent(),/需订正/);
   await close();await open('口算练习20题');await page.locator('.trello-homework-result').getByText('优',{exact:true}).waitFor();await close();
   await open('单词听写');assert.equal(await page.getByLabel('听写词表（每行一项）').inputValue(),'bus stop\ncamera\npost office');
   await page.getByRole('button',{name:'开始自动阅卷'}).click();assert.equal(await page.evaluate(()=>reviewRequest.kind),'dictation');await close();
