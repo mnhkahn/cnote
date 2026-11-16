@@ -74,19 +74,50 @@ fn grade(result: &Value) -> Result<&str> {
     );
     Ok(grade)
 }
+fn yaml_word(value: &str) -> String {
+    let value = value.trim();
+    if value.starts_with(|c: char| c.is_ascii_alphabetic())
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphabetic() || " '-".contains(c))
+        && !["null", "true", "false", "yes", "no", "on", "off"]
+            .contains(&value.to_ascii_lowercase().as_str())
+    {
+        value.to_owned()
+    } else {
+        serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned())
+    }
+}
+fn dictation_pair(input: &Value, item: &Value) -> Result<String> {
+    let index = item["number"]
+        .as_u64()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|n| usize::try_from(n).ok())
+        .context("听写题号缺失，未提交错词记录")?;
+    let word = input["words"]
+        .as_array()
+        .and_then(|words| words.get(index))
+        .and_then(Value::as_str)
+        .filter(|word| !word.trim().is_empty())
+        .context("听写原词缺失，未提交错词记录")?;
+    let raw = if item["state"] == "blank" {
+        "[未作答]"
+    } else {
+        item["raw"]
+            .as_str()
+            .filter(|raw| !raw.trim().is_empty())
+            .unwrap_or("[未识别]")
+    };
+    Ok(format!("{}: {}", yaml_word(raw), yaml_word(word)))
+}
 fn comment(review: &Review) -> Result<String> {
     let report = &review.result["report"];
     let grade = grade(&review.result)?;
     let provisional = report["provisional"] == true;
-    let mut lines = vec![format!(
-        "打分结果：{}{}",
-        if provisional { "暂评·" } else { "" },
-        if grade.is_empty() {
-            "暂不评级"
-        } else {
-            grade
-        }
-    )];
+    let mut lines = Vec::new();
+    if grade.is_empty() {
+        lines.push("暂无可判定评分，请先核对作业内容。".to_owned());
+    }
     if review.result["input"]["kind"] == "reading" {
         if let Some(feedback) = report["feedback"].as_str().filter(|s| !s.trim().is_empty()) {
             lines.push(feedback.to_owned());
@@ -108,17 +139,57 @@ fn comment(review: &Review) -> Result<String> {
             "正确 {} · 需订正 {} · 待核对 {} / 共 {} 项",
             report["correct"], report["incorrect"], report["pending"], report["total"]
         ));
-        for item in report["items"].as_array().into_iter().flatten() {
-            lines.push(format!(
-                "第{}题：{}。{}",
-                item["number"],
-                match item["status"].as_str() {
-                    Some("correct") => "正确",
-                    Some("incorrect") => "需订正",
-                    _ => "待核对",
-                },
-                item["hint"].as_str().unwrap_or_default()
-            ));
+        let dictation = review.result["input"]["kind"] == "dictation";
+        for (status, heading) in [("incorrect", "需订正"), ("pending", "待核对")] {
+            let items: Vec<_> = report["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|item| item["status"] == status)
+                .collect();
+            if items.is_empty() {
+                continue;
+            }
+            lines.push(format!("{heading}："));
+            for item in items {
+                if dictation {
+                    lines.push(dictation_pair(&review.result["input"], item)?);
+                    continue;
+                }
+                let raw = item["raw"].as_str().unwrap_or_default().trim();
+                let expression = item["expression"].as_str().unwrap_or_default().trim();
+                let observed = if item["state"] == "blank" {
+                    "未作答".to_owned()
+                } else if raw.is_empty() {
+                    "字迹不清，未能确认".to_owned()
+                } else if dictation || expression.is_empty() {
+                    format!("识别为「{raw}」")
+                } else {
+                    format!("识别为「{expression} = {raw}」")
+                };
+                lines.push(format!(
+                    "第{}{}：{}。",
+                    item["number"],
+                    if dictation { "项" } else { "题" },
+                    observed
+                ));
+            }
+            if dictation {
+                continue;
+            }
+            lines.push(
+                if status == "pending" {
+                    "请对照原图核对这些项目，暂不判错。"
+                } else if dictation {
+                    "请先核对识别内容，再重新听写以上项目。"
+                } else {
+                    "请先核对识别内容，再重新计算以上题目。"
+                }
+                .to_owned(),
+            );
+        }
+        if provisional {
+            lines.push("含待核对项目，当前评分为暂评。".to_owned());
         }
     }
     let mut payload =
@@ -426,13 +497,13 @@ mod tests {
         }
     }
     #[test]
-    fn tablet_text_contains_every_judgment_without_submission_parameters() {
+    fn tablet_text_summarizes_correct_items_and_keeps_recognition_for_corrections() {
         let mut review = review("中");
         review.result["input"]["words"] = json!(["secret reference word"]);
         review.result["report"]["items"] = json!([
             {"number":1,"status":"correct","raw":"student answer"},
-            {"number":2,"status":"incorrect","hint":"请重新听写"},
-            {"number":3,"status":"pending","hint":"请核对字迹"}
+            {"number":2,"status":"incorrect","raw":"e-reder","hint":"请重新听写"},
+            {"number":3,"status":"pending","raw":"unclear","hint":"请核对字迹"}
         ]);
         let comment = comment(&review).unwrap();
         let payload: Value =
@@ -441,11 +512,42 @@ mod tests {
         assert_eq!(payload["type"], "text");
         assert!(!payload.as_object().unwrap().contains_key("attachment_id"));
         let text = payload["text"].as_str().unwrap();
-        assert!(text.contains("第1题：正确"));
-        assert!(text.contains("第2题：需订正"));
-        assert!(text.contains("第3题：待核对"));
+        assert!(!text.contains("第1题"));
+        assert!(text.contains("第2题：识别为「e-reder」"));
+        assert!(text.contains("待核对："));
+        assert!(text.contains("第3题：识别为「unclear」"));
         assert!(!text.contains("secret reference word"));
         assert!(!text.contains("review_id"));
+    }
+    #[test]
+    fn dictation_records_observed_to_reference_pairs_and_separates_pending() {
+        let mut review = review("差");
+        review.result["input"] =
+            json!({"kind":"dictation","words":["hungry","ice cream","lemonade","menu"]});
+        review.result["report"]["items"] = json!([
+            {"number":1,"status":"pending","raw":"e-reder game console gps","state":"uncertain"},
+            {"number":2,"status":"correct","raw":"ice cream","state":"clear"},
+            {"number":3,"status":"incorrect","raw":"temud","state":"clear"},
+            {"number":4,"status":"incorrect","raw":"","state":"blank"}
+        ]);
+        let payload: Value = serde_json::from_str(
+            comment(&review)
+                .unwrap()
+                .strip_prefix("作业批改：\n")
+                .unwrap(),
+        )
+        .unwrap();
+        let text = payload["text"].as_str().unwrap();
+        assert!(text.contains("需订正：\ntemud: lemonade\n\"[未作答]\": menu"));
+        assert!(text.contains("待核对：\ne-reder game console gps: hungry"));
+        assert!(!text.contains("ice cream: ice cream"));
+        assert!(!text.contains("第3项"));
+        let item = json!({"number":3,"raw":"a:\nb","state":"clear"});
+        assert_eq!(
+            dictation_pair(&review.result["input"], &item).unwrap(),
+            "\"a:\\nb\": lemonade"
+        );
+        assert!(dictation_pair(&json!({"words":[]}), &item).is_err());
     }
     #[test]
     fn status_failure_retries_without_duplicate_comment() {
