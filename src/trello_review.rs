@@ -108,19 +108,14 @@ fn comment(review: &Review) -> Result<String> {
             "正确 {} · 需订正 {} · 待核对 {} / 共 {} 项",
             report["correct"], report["incorrect"], report["pending"], report["total"]
         ));
-        for item in report["items"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|item| item["status"] != "correct")
-        {
+        for item in report["items"].as_array().into_iter().flatten() {
             lines.push(format!(
                 "第{}题：{}。{}",
                 item["number"],
-                if item["status"] == "incorrect" {
-                    "需订正"
-                } else {
-                    "待核对"
+                match item["status"].as_str() {
+                    Some("correct") => "正确",
+                    Some("incorrect") => "需订正",
+                    _ => "待核对",
                 },
                 item["hint"].as_str().unwrap_or_default()
             ));
@@ -317,7 +312,6 @@ pub(super) fn review(api: &Api, v: &Value) -> Result<Value> {
     let mut result =
         crate::homework::review(v, bytes, data["mime"].as_str().context("附件格式缺失")?)?;
     result["source_attachment"] = v["attachment"].clone();
-    grade(&result)?;
     let mut review = Review {
         review_id: uuid::Uuid::new_v4().to_string(),
         result,
@@ -430,6 +424,28 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn tablet_text_contains_every_judgment_without_submission_parameters() {
+        let mut review = review("中");
+        review.result["input"]["words"] = json!(["secret reference word"]);
+        review.result["report"]["items"] = json!([
+            {"number":1,"status":"correct","raw":"student answer"},
+            {"number":2,"status":"incorrect","hint":"请重新听写"},
+            {"number":3,"status":"pending","hint":"请核对字迹"}
+        ]);
+        let comment = comment(&review).unwrap();
+        let payload: Value =
+            serde_json::from_str(comment.strip_prefix("作业批改：\n").unwrap()).unwrap();
+        assert_eq!(payload["version"], 1);
+        assert_eq!(payload["type"], "text");
+        assert!(!payload.as_object().unwrap().contains_key("attachment_id"));
+        let text = payload["text"].as_str().unwrap();
+        assert!(text.contains("第1题：正确"));
+        assert!(text.contains("第2题：需订正"));
+        assert!(text.contains("第3题：待核对"));
+        assert!(!text.contains("secret reference word"));
+        assert!(!text.contains("review_id"));
     }
     #[test]
     fn status_failure_retries_without_duplicate_comment() {

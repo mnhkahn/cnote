@@ -374,30 +374,22 @@ fn description_with_grade(description: &str, grade: &str) -> Result<String> {
     } else {
         "\n"
     };
-    let mut output = String::new();
-    let mut replaced = false;
-    for line in description.split_inclusive('\n') {
-        let is_grade = line
-            .split_once([':', '：'])
-            .is_some_and(|(key, _)| key.trim() == "打分结果");
-        if !replaced && is_grade {
-            replaced = true;
-            if !grade.is_empty() {
-                output.push_str(&format!("打分结果：{grade}"));
-                if line.ends_with('\n') {
-                    output.push_str(newline);
-                }
-            }
-        } else {
-            output.push_str(line);
-        }
-    }
-    if !replaced && !grade.is_empty() {
-        output = format!(
-            "打分结果：{grade}{}{description}",
-            if description.is_empty() { "" } else { newline }
-        );
-    }
+    let body: String = description
+        .split_inclusive('\n')
+        .filter(|line| {
+            !line
+                .split_once([':', '：'])
+                .is_some_and(|(key, _)| key.trim() == "打分结果")
+        })
+        .collect();
+    let output = if grade.is_empty() {
+        body
+    } else {
+        format!(
+            "打分结果：{grade}{}{body}",
+            if body.is_empty() { "" } else { newline }
+        )
+    };
     Ok(output)
 }
 
@@ -773,7 +765,7 @@ mod tests {
         );
         assert_eq!(
             description_with_grade("说明\r\n 打分结果 : 暂评·良\r\n要求：保留\r\n", "100").unwrap(),
-            "说明\r\n打分结果：100\r\n要求：保留\r\n"
+            "打分结果：100\r\n说明\r\n要求：保留\r\n"
         );
         assert_eq!(
             description_with_grade("打分结果：良\n原题", "").unwrap(),

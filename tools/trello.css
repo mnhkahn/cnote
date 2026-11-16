@@ -25,11 +25,11 @@
 #trello-tool .trello-image-ocr{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;font-size:16px}.trello-image-ocr:disabled{opacity:.5;cursor:wait}.trello-image-content{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden}.trello-image-content>.trello-image-viewport{min-width:0}.trello-image-transcript{flex:0 0 34%;box-sizing:border-box;min-width:0;padding:14px;overflow:auto;border-left:1px solid var(--line);font-size:12px;line-height:1.6;user-select:text;-webkit-user-select:text}.trello-image-transcript[hidden]{display:none}.trello-image-transcript>strong{display:block;margin-bottom:8px}.trello-image-transcript pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;margin:0}
 
 .trello-homework-review{border:1px solid var(--line);border-radius:10px;padding:16px;margin:18px 0}
-.trello-homework-review form{display:grid;gap:12px}
-.trello-homework-review label{display:grid;gap:6px;font-weight:600}
-.trello-homework-review select,.trello-homework-review input,.trello-homework-review textarea{box-sizing:border-box;width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--bg,#fff);color:inherit;font:inherit}
-.trello-homework-review textarea{resize:vertical}
 .trello-homework-result{overflow-x:auto}
 .trello-homework-result pre{white-space:pre-wrap;overflow-wrap:anywhere}
 .trello-review-table{width:100%;border-collapse:collapse;font-size:13px}
 .trello-review-table th,.trello-review-table td{padding:8px;text-align:left;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+
+.trello-review-entry{padding:12px 0;border-bottom:1px solid var(--line)}
+.trello-review-entry summary{cursor:pointer;color:var(--muted)}
+.trello-review-feedback{white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}

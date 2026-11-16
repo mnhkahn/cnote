@@ -377,23 +377,52 @@
   }
   if(report.provisional)box.append(node('p','作业范围或字迹仍待核对，当前为暂评。'));
  }
+ function homeworkReview(action){
+  const text=action.data?.text?.trim();if(!text?.startsWith('作业批改：'))return null;
+  try{
+   const review=JSON.parse(text.slice('作业批改：'.length));
+   if(review.version!==1||!['text','image','audio'].includes(review.type))return null;
+   if(review.type==='text'?typeof review.text!=='string'||!review.text.trim()||Object.hasOwn(review,'attachment_id'):typeof review.attachment_id!=='string'||!review.attachment_id.trim()||Object.hasOwn(review,'text'))return null;
+   if(Object.hasOwn(review,'has_errors')&&typeof review.has_errors!=='boolean')return null;
+   return {...review,id:action.id,date:action.date};
+  }catch{return null;}
+ }
+ function renderReviewHistory(body,actions,attachments){
+  const reviews=actions.map(homeworkReview).filter(Boolean).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  if(!reviews.length)return;
+  const section=node('section',null,'trello-review-history');section.append(node('h3','批改记录'));
+  for(const [index,review] of reviews.entries()){
+   const entry=node(index?'details':'div',null,'trello-review-entry'),date=new Date(review.date).toLocaleString();
+   entry.append(node(index?'summary':'strong',`${index?'历史批改':'最新批改'} · ${date}`));
+   if(['100','优','良','中','差'].includes(review.grade))entry.append(node('p',`${review.provisional?'暂评 · ':''}${review.grade}`,'trello-grade'));
+   if(review.type==='text')entry.append(linkedText('div',review.text.trim(),'trello-review-feedback'));
+   else{
+    const attachment=attachments.find(a=>a.id===review.attachment_id);
+    entry.append(attachment?button(review.type==='image'?'查看批改图片':'收听批改语音',()=>openLink(attachment.url)):node('p','批改附件暂不可用'));
+   }
+   section.append(entry);
+  }
+  body.append(section);
+ }
  function renderHomework(body,card,attachments,epoch,saved){
   const fields=homeworkFields(card);if(!fields.kind)return;
-  const section=node('section',null,'trello-homework-review'),form=node('form'),status=node('p'),result=node('div',null,'trello-homework-result');status.setAttribute('role','status');result.setAttribute('aria-live','polite');
-  section.append(node('h3','自动阅卷'),node('p','自动填入卡片内容，核对后开始批改。'),form,status,result);body.append(section);
-  const label=(text,input)=>{const wrap=node('label',text);wrap.append(input);form.append(wrap);};
-  const select=node('select');select.setAttribute('aria-label','批改附件');
+  const section=node('section',null,'trello-homework-review'),status=node('p'),result=node('div',null,'trello-homework-result');status.setAttribute('role','status');result.setAttribute('aria-live','polite');
   const reading=fields.kind==='reading';
   const candidates=attachments.filter(a=>a.isUpload!==false&&(reading?/^audio\//.test(a.mimeType||'')||/\.(m4a|mp3|wav|webm|ogg|aac|flac|amr|3gp|opus)$/i.test(a.name||''):/^image\/(jpeg|png|webp)$/.test(a.mimeType||'')||/\.(jpe?g|png|webp)$/i.test(a.name||''))).sort((a,b)=>String(b.date||b.id).localeCompare(String(a.date||a.id)));
-  for(const a of candidates)select.append(new Option((a.name||'附件')+(a.date?' · '+new Date(a.date).toLocaleString():''),a.id));select.required=true;label(reading?'朗读录音':'作业图片',select);
-  const input=node(reading||fields.kind==='dictation'?'textarea':'input');input.required=true;
-  if(reading){input.value=fields.reference;input.rows=6;input.maxLength=30000;label('英文原文',input);}
-  else if(fields.kind==='dictation'){input.value=fields.words;input.rows=5;input.maxLength=15000;label('听写词表（每行一项）',input);}
-  else{input.type='number';input.min=1;input.max=100;input.value=fields.count;label('本次应完成题数',input);}
-  const submit=button('开始自动阅卷');submit.type='submit';submit.className='primary';form.append(submit);
-  if(!candidates.length){submit.disabled=true;status.textContent=reading?'此卡片没有可批改的朗读录音。':'此卡片没有可批改的JPG、PNG或WebP作业图片。';}
-  const cacheKey=()=>JSON.stringify([card.id,fields.kind,select.value,input.value]);
-  let publicationPending=false;
+  const attachment=candidates[0];
+  let publicationPending=false,reviewing=false,loading=false;
+  const missing=()=>!attachment?(reading?'暂无朗读录音，请先提交作业。':'暂无作业图片，请先提交作业。'):reading&&!fields.reference?'卡片缺少英文原文，请补充作业描述。':fields.kind==='dictation'&&!fields.words?'卡片缺少听写词表，请补充作业描述。':fields.kind==='arithmetic'&&(!Number.isInteger(fields.count)||fields.count<1||fields.count>100)?'卡片缺少本次应完成题数（1～100），请补充作业描述。':'';
+  const submit=button('开始自动阅卷',async()=>{
+   if(submit.disabled)return;
+   const extra={kind:fields.kind,attachment:attachment.id,...(reading?{reference:fields.reference}:fields.kind==='dictation'?{words:fields.words}:{count:fields.count})},key=cacheKey();
+   reviewing=true;sync();status.textContent='正在阅卷并保存结果…';result.replaceChildren();
+   try{const data=await request('review_homework',card.id,extra);homeworkResults.set(key,data);if(epoch===detailEpoch)display(data,true);}
+   catch(error){if(epoch===detailEpoch)status.textContent='阅卷失败：'+error.message;}
+   finally{reviewing=false;sync();}
+  },'primary');
+  section.append(node('h3','自动阅卷'),submit,status,result);body.append(section);
+  const sync=()=>{submit.disabled=publicationPending||reviewing||loading||!!missing();};
+  const cacheKey=()=>JSON.stringify([card.id,fields.kind,attachment?.id,reading?fields.reference:fields.kind==='dictation'?fields.words:String(fields.count)]);
   const applyPublication=data=>{
    if(!data.card)return;
    Object.assign(card,data.card);const index=cards.findIndex(c=>c.id===card.id);if(index>=0)cards[index]={...cards[index],...data.card};
@@ -402,43 +431,26 @@
    body.querySelector('.trello-card-status').textContent=`${lists.find(l=>l.id===card.idList)?.name||'未知进度'} · ${card.dueComplete?'已标记完成':'未标记完成'}`;
   };
   const display=(data,apply=false)=>{
-   renderHomeworkResult(result,data);publicationPending=data.published===false;select.disabled=input.disabled=publicationPending;
-   submit.disabled=publicationPending||!candidates.length;
-   if(data.published===true){status.textContent='批改结果已提交到 Trello';if(apply)applyPublication(data);}
+   renderHomeworkResult(result,data);publicationPending=data.published===false;sync();
+   if(data.published===true){status.textContent='阅卷结果已保存到 Trello';if(apply)applyPublication(data);}
    else if(publicationPending){
-    status.textContent='阅卷已完成，结果尚未提交：'+(data.publication_error||'请重试提交已保存的结果');
-    const retry=button('重试提交结果',async()=>{
-     retry.disabled=true;status.textContent='正在提交已保存的批改结果…';
+    status.textContent='阅卷完成，保存失败：'+(data.publication_error||'请重试保存结果');
+    const retry=button('重试保存结果',async()=>{
+     retry.disabled=true;status.textContent='正在保存阅卷结果…';
      try{const updated=await request('publish_homework',card.id,{review_id:data.review_id});homeworkResults.set(cacheKey(),updated);if(epoch===detailEpoch)display(updated,true);}
-     catch(error){if(epoch===detailEpoch){status.textContent='提交失败：'+error.message;retry.disabled=false;}}
+     catch(error){if(epoch===detailEpoch){status.textContent='保存失败：'+error.message;retry.disabled=false;}}
     });result.append(retry);
-   }else status.textContent='批改完成';
+   }else status.textContent='阅卷结果尚未确认保存，请重新打开卡片核对。';
   };
-  const showCached=()=>{if(publicationPending)return;result.replaceChildren();const cached=homeworkResults.get(cacheKey());if(cached)display(cached);};input.oninput=select.onchange=showCached;
-  if(saved){
-   if(saved.published===false){
-    if(saved.source_attachment)select.value=saved.source_attachment;
-    if(reading)input.value=saved.input.reference||input.value;
-    else if(fields.kind==='dictation')input.value=saved.input.words?.join('\n')||input.value;
-    else input.value=saved.input.count||input.value;
-   }
-   const savedValue=reading?saved.input.reference:fields.kind==='dictation'?saved.input.words?.join('\n'):String(saved.input.count||'');
-   if(!saved.source_attachment||(saved.source_attachment===select.value&&savedValue===input.value))homeworkResults.set(cacheKey(),saved);
+  const cached=homeworkResults.get(cacheKey());
+  if(saved||cached)display(saved||cached);else status.textContent=missing();
+  sync();
+  if(reading&&!fields.reference&&fields.link&&!publicationPending){
+   loading=true;sync();if(!result.childNodes.length)status.textContent='正在准备课文…';
+   request('reading_source',card.id,{link:fields.link}).then(data=>{
+    if(epoch!==detailEpoch)return;fields.reference=data.reference||'';loading=false;sync();if(!result.childNodes.length)status.textContent=missing();
+   }).catch(()=>{if(epoch===detailEpoch){loading=false;sync();if(!result.childNodes.length)status.textContent='课文读取失败，请稍后重新打开卡片。';}});
   }
-  showCached();
-  if(saved&&!result.childNodes.length){display(saved);if(saved.published===true)status.textContent='上次批改结果已提交到 Trello；可选择本次附件重新阅卷。';}
-  if(reading&&!input.value&&fields.link){
-   status.textContent='正在从课文链接填入英文原文…';const original=input.value;
-   request('reading_source',card.id,{link:fields.link}).then(data=>{if(epoch!==detailEpoch)return;if(input.value===original){input.value=data.reference||'';showCached();}status.textContent=candidates.length?'已从课文链接填入原文，请核对。':'此卡片没有可批改的朗读录音。';}).catch(error=>{if(epoch===detailEpoch)status.textContent=error.message+'；可在上方补充原文。';});
-  }
-  form.onsubmit=async event=>{
-   event.preventDefault();if(submit.disabled||!form.reportValidity())return;
-   const extra={kind:fields.kind,attachment:select.value,...(reading?{reference:input.value}:fields.kind==='dictation'?{words:input.value}:{count:Number(input.value)})},key=cacheKey();
-   submit.disabled=select.disabled=input.disabled=true;status.textContent='正在下载附件、批改并提交结果，请稍候…';result.replaceChildren();
-   try{const data=await request('review_homework',card.id,extra);homeworkResults.set(key,data);if(epoch===detailEpoch)display(data,true);}
-   catch(error){if(epoch===detailEpoch)status.textContent='批改失败：'+error.message;}
-   finally{select.disabled=input.disabled=publicationPending;submit.disabled=publicationPending||!candidates.length;}
-  };
  }
  async function showDetail(card){const epoch=++detailEpoch;removeDetail();const dialog=node('dialog',null,'trello-detail');dialog.id='trello-detail';const close=()=>{detailEpoch++;dialog.close();removeDetail();};const header=node('div',null,'trello-detail-header');header.append(node('h2',card.name),button('关闭',close));const body=node('div','正在读取完整信息…','trello-detail-body');dialog.append(header,body);root.append(dialog);dialog.addEventListener('cancel',event=>{event.preventDefault();close();});
   const outside=event=>{const bounds=dialog.getBoundingClientRect();return event.target===dialog&&(event.clientX<bounds.left||event.clientX>bounds.right||event.clientY<bounds.top||event.clientY>bounds.bottom);};
@@ -451,12 +463,15 @@
    if(full.labels?.length)body.append(node('p','标签：'+full.labels.map(l=>l.name||l.color).join('、')));
    if(full.members?.length)body.append(node('p','成员：'+full.members.map(m=>m.fullName||m.username).join('、')));
    for(const checklist of full.checklists||[]){body.append(node('h3',checklist.name));for(const item of checklist.checkItems||[])body.append(linkedText('p',(item.state==='complete'?'☑ ':'☐ ')+item.name));}
+   renderReviewHistory(body,data.actions||[],data.attachments||[]);
    renderHomework(body,full,data.attachments||[],epoch,data.homework_review);
    body.append(node('h3','附件'));renderAttachments(body,data.attachments||[],card.id,epoch);if(!data.attachments?.length)body.append(node('p',data.partial?'附件可能未能加载':'暂无附件'));
-   const activity=node('details',null,'trello-activity');activity.append(node('summary',`评论与活动（${(data.actions||[]).length}）`));const records=node('ul',null,'trello-activity-list');
+   const activity=node('details',null,'trello-activity');activity.append(node('summary',`评论与活动（${(data.actions||[]).filter(a=>!homeworkReview(a)).length}）`));const records=node('ul',null,'trello-activity-list');
    for(const action of data.actions||[]){
+    if(homeworkReview(action))continue;
     const entry=node('li',null,'trello-action');let text=action.data?.text;
     if(!text){const data=action.data||{};text=data.listBefore&&data.listAfter?`${data.listBefore.name} → ${data.listAfter.name}`:data.attachment?`${action.type==='deleteAttachment'?'删除':'上传'}附件：${data.attachment.name||''}`:data.old&&Object.hasOwn(data.old,'dueComplete')?(data.card?.dueComplete?'标记完成':'取消完成'):data.old&&Object.hasOwn(data.old,'desc')?'更新描述':data.old&&Object.hasOwn(data.old,'name')?'修改标题':({createCard:'创建卡片',copyCard:'复制卡片',updateCard:'更新卡片'})[action.type]||action.type;}
+    if(String(text||'').trim().startsWith('作业批改：'))text='批改记录暂无法读取';
     const time=node('time',new Date(action.date).toLocaleString()),author=node('span',action.memberCreator?.fullName||'','trello-action-author'),content=linkedText('span',String(text||'').trim(),'trello-action-text');time.dateTime=action.date;content.title=String(text||'');author.title=author.textContent;entry.append(time,author,content);records.append(entry);
    }
    activity.append(records);if(!data.actions?.length)activity.append(node('p',data.partial?'活动可能未能加载':'暂无活动'));if(data.actions?.length>=1000)activity.append(node('p','仅显示最近 1000 条活动。'));body.append(activity);
