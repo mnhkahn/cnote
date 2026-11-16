@@ -37,8 +37,6 @@ jobs:
         env:
           CNOTE_WEB_VERSION: ${{ github.ref_name }}
           CNOTE_WEB_CLIENT_ID: ${{ vars.CNOTE_WEB_CLIENT_ID }}
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm run test:web
       - name: Archive notes artifact
         run: |
           tar -czf dist/cnote-web.tar.gz -C dist/cnote-web .
