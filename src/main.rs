@@ -4,6 +4,7 @@ mod asr;
 mod cloud;
 mod credential_store;
 mod engine;
+mod homework;
 mod icons;
 mod link_metadata;
 mod menus;

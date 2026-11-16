@@ -181,8 +181,9 @@ fn preview_mime(attachment: &Value) -> Option<&str> {
         "image/jpeg" | "image/png" | "image/webp" | "image/gif" | "image/avif" | "image/bmp"
         | "image/heic" | "image/heif" | "image/tiff" | "audio/mpeg" | "audio/mp4"
         | "audio/x-m4a" | "audio/wav" | "audio/x-wav" | "audio/ogg" | "audio/aac"
-        | "audio/webm" | "video/mp4" | "video/webm" | "video/quicktime" | "application/pdf"
-        | "text/plain" | "text/markdown" | "text/csv" | "application/json" => Some(mime),
+        | "audio/webm" | "audio/flac" | "audio/amr" | "audio/3gpp" | "audio/opus" | "video/mp4"
+        | "video/webm" | "video/quicktime" | "application/pdf" | "text/plain" | "text/markdown"
+        | "text/csv" | "application/json" => Some(mime),
         _ => {
             let name = attachment["name"].as_str().unwrap_or("");
             match name
@@ -204,6 +205,9 @@ fn preview_mime(attachment: &Value) -> Option<&str> {
                 "wav" => Some("audio/wav"),
                 "ogg" | "opus" => Some("audio/ogg"),
                 "aac" => Some("audio/aac"),
+                "flac" => Some("audio/flac"),
+                "amr" => Some("audio/amr"),
+                "3gp" => Some("audio/3gpp"),
                 "mp4" => Some("video/mp4"),
                 "webm" => Some("video/webm"),
                 "mov" => Some("video/quicktime"),
@@ -426,7 +430,7 @@ pub fn request(v: Value) -> Result<Value> {
             return Ok(json!({"connected":false}));
         }
         "boards" | "board" | "card" | "attachment" | "recognize_image" | "transcribe_audio"
-        | "update_cell" => {}
+        | "update_cell" | "review_homework" | "reading_source" => {}
         _ => bail!("未知的 Trello 操作"),
     }
     let api = Api::new(session.auth()?.ok_or(AuthRequired)?)?;
@@ -474,7 +478,8 @@ pub fn request(v: Value) -> Result<Value> {
             };
             Ok(json!({"card":api.put(&format!("/cards/{id}"), &body)?}))
         }
-        "attachment" | "recognize_image" | "transcribe_audio" => {
+        "reading_source" => crate::homework::reading_source(v["link"].as_str().unwrap_or_default()),
+        "attachment" | "recognize_image" | "transcribe_audio" | "review_homework" => {
             let card = identifier(&v)?;
             let id = v["attachment"].as_str().unwrap_or("");
             anyhow::ensure!(
@@ -486,9 +491,16 @@ pub fn request(v: Value) -> Result<Value> {
             let data = api.attachment(
                 card,
                 id,
-                transcribe || recognize || v["original"].as_bool().unwrap_or(false),
+                transcribe
+                    || recognize
+                    || v["op"] == "review_homework"
+                    || v["original"].as_bool().unwrap_or(false),
             )?;
-            if recognize {
+            if v["op"] == "review_homework" {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data["base64"].as_str().context("附件数据缺失")?)?;
+                crate::homework::review(&v, bytes, data["mime"].as_str().context("附件格式缺失")?)
+            } else if recognize {
                 let mime = data["mime"].as_str().context("图片格式缺失")?;
                 anyhow::ensure!(mime.starts_with("image/"), "此附件不是图片");
                 let bytes = base64::engine::general_purpose::STANDARD
