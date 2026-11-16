@@ -11,6 +11,7 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' a
    {id:'reading',name:'阅读',desc:'作业类型：阅读英语\\n英语原文：\\nHello there.\\nWe read together.\\n英语译文：你好',idList:'todo'},
    {id:'legacy',name:'英语阅读链接',desc:'作业类型：阅读英语\\n阅读英语链接：/ai/translate?textbook=0&article=1',idList:'todo'},
    {id:'missing',name:'口算缺少附件',desc:'',idList:'todo'},
+   {id:'comprehension',name:'语文阅读理解',desc:'类型：普通作业\\n作业内容：回答课后问题',idList:'todo'},
    {id:'history',name:'已批改单词听写',desc:'作业类型：背单词\\n背单词：bus stop, camera',idList:'todo'}
   ];cards.forEach(c=>c.due=new Date().toISOString());
   window.ipc={postMessage(raw){const m=JSON.parse(raw);messages.push(m);if(m.type==='workspace')cnoteTools.show(m.index);if(m.type==='tool_ready')setTimeout(()=>cnoteTools.receive({type:'tool_state',state:{trelloBoard:'board'}}),0);if(m.type!=='trello')return;
@@ -44,6 +45,6 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' a
   await page.getByText('阅卷结果尚未确认保存，请重新打开卡片核对。',{exact:true}).waitFor();assert(!(await page.locator('.trello-homework-review').textContent()).includes('Hello there'));assert(!(await page.locator('.trello-homework-review').textContent()).includes('together'));await close();
   await open('英语阅读链接');await page.waitForFunction(()=>!document.querySelector('.trello-homework-review button.primary').disabled);await page.getByRole('button',{name:'开始自动阅卷'}).click();assert.equal(await page.evaluate(()=>reviewRequest.reference),'From textbook.\nSecond line.');await close();
   await open('口算缺少附件');assert(await page.getByRole('button',{name:'开始自动阅卷'}).isDisabled());await page.getByText('暂无作业图片，请先提交作业。',{exact:true}).waitFor();await close();
-  await open('已批改单词听写');assert.equal(await page.locator('.trello-review-history').count(),0);const content=await page.locator('#trello-detail').textContent();assert(!content.includes('private-review-id'));assert(!content.includes('正确。正确'));assert(!content.includes('第2题：需订正。请重新听写。'));assert(!content.includes('has_errors'));assert(!content.includes('作业批改：'));assert(!content.includes('attachment_id'));assert.equal(await page.locator('.trello-homework-review input,.trello-homework-review textarea,.trello-homework-review select').count(),0);
+  await open('已批改单词听写');assert.equal(await page.locator('.trello-review-history').count(),0);const content=await page.locator('#trello-detail').textContent();assert(!content.includes('private-review-id'));assert(!content.includes('正确。正确'));assert(!content.includes('第2题：需订正。请重新听写。'));assert(!content.includes('has_errors'));assert(!content.includes('作业批改：'));assert(!content.includes('attachment_id'));assert.equal(await page.locator('.trello-homework-review input,.trello-homework-review textarea,.trello-homework-review select').count(),0);await close();await page.getByRole('button',{name:'语文阅读理解',exact:true}).click();await page.locator('.trello-description').waitFor();assert.equal(await page.locator('.trello-homework-review').count(),0);
  }finally{await browser.close();}
 });

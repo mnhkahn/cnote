@@ -115,26 +115,16 @@ fn comment(review: &Review) -> Result<String> {
     let grade = grade(&review.result)?;
     let provisional = report["provisional"] == true;
     let mut lines = Vec::new();
-    if grade.is_empty() {
-        lines.push("暂无可判定评分，请先核对作业内容。".to_owned());
-    }
     if review.result["input"]["kind"] == "reading" {
-        if let Some(feedback) = report["feedback"].as_str().filter(|s| !s.trim().is_empty()) {
-            lines.push(feedback.to_owned());
-        } else {
-            lines.push(format!(
-                "匹配实词 {} 次，替换 {} 次。",
-                report["matched"], report["substituted"]
-            ));
-            for word in report["focus"].as_array().into_iter().flatten() {
-                lines.push(format!(
-                    "重点跟读：{}（累计替换 {} 次）",
-                    word["word"].as_str().unwrap_or_default(),
-                    word["count"]
-                ));
-            }
-        }
+        let feedback = report["feedback"]
+            .as_str()
+            .filter(|feedback| !feedback.trim().is_empty())
+            .context("阅读服务未返回完整反馈，结果已保留，未提交不完整的批改")?;
+        lines.push(feedback.to_owned());
     } else {
+        if grade.is_empty() {
+            lines.push("暂无可判定评分，请先核对作业内容。".to_owned());
+        }
         lines.push(format!(
             "正确 {} · 需订正 {} · 待核对 {} / 共 {} 项",
             report["correct"], report["incorrect"], report["pending"], report["total"]
@@ -162,31 +152,16 @@ fn comment(review: &Review) -> Result<String> {
                     "未作答".to_owned()
                 } else if raw.is_empty() {
                     "字迹不清，未能确认".to_owned()
-                } else if dictation || expression.is_empty() {
+                } else if expression.is_empty() {
                     format!("识别为「{raw}」")
                 } else {
                     format!("识别为「{expression} = {raw}」")
                 };
-                lines.push(format!(
-                    "第{}{}：{}。",
-                    item["number"],
-                    if dictation { "项" } else { "题" },
-                    observed
-                ));
-            }
-            if dictation {
-                continue;
-            }
-            lines.push(
-                if status == "pending" {
-                    "请对照原图核对这些项目，暂不判错。"
-                } else if dictation {
-                    "请先核对识别内容，再重新听写以上项目。"
-                } else {
-                    "请先核对识别内容，再重新计算以上题目。"
+                lines.push(format!("第{}题：{}。", item["number"], observed));
+                if let Some(hint) = item["hint"].as_str().filter(|hint| !hint.trim().is_empty()) {
+                    lines.push(format!("提示：{hint}"));
                 }
-                .to_owned(),
-            );
+            }
         }
         if provisional {
             lines.push("含待核对项目，当前评分为暂评。".to_owned());
@@ -548,6 +523,49 @@ mod tests {
             "\"a:\\nb\": lemonade"
         );
         assert!(dictation_pair(&json!({"words":[]}), &item).is_err());
+    }
+    #[test]
+    fn reading_keeps_the_service_feedback_verbatim_including_links() {
+        let mut review = review("良");
+        let feedback = "阅读等级：良。\n阅读参考分：72.0%。\n\n重点词重读：https://www.cyeam.com/ai/translate?words=example\n逐词听发音并跟读3遍。\n";
+        review.result["input"] = json!({"kind":"reading"});
+        review.result["report"] = json!({"grade":"良","feedback":feedback});
+        let payload: Value = serde_json::from_str(
+            comment(&review)
+                .unwrap()
+                .strip_prefix("作业批改：\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["text"], feedback);
+        review.result["report"]["feedback"] = json!("");
+        assert!(
+            comment(&review)
+                .unwrap_err()
+                .to_string()
+                .contains("未返回完整反馈")
+        );
+    }
+    #[test]
+    fn arithmetic_keeps_recognized_expression_answer_and_server_hint() {
+        let mut review = review("良");
+        review.result["report"]["items"] = json!([
+            {"number":1,"status":"correct","expression":"1+1","raw":"2","hint":"正确"},
+            {"number":2,"status":"incorrect","expression":"26+17","raw":"42","hint":"请检查进位"},
+            {"number":3,"status":"pending","expression":"8*3","raw":"?","state":"uncertain","hint":"请核对原图字迹"}
+        ]);
+        let payload: Value = serde_json::from_str(
+            comment(&review)
+                .unwrap()
+                .strip_prefix("作业批改：\n")
+                .unwrap(),
+        )
+        .unwrap();
+        let text = payload["text"].as_str().unwrap();
+        assert!(text.contains("识别为「26+17 = 42」"));
+        assert!(text.contains("提示：请检查进位"));
+        assert!(text.contains("提示：请核对原图字迹"));
+        assert!(!text.contains("1+1"));
     }
     #[test]
     fn status_failure_retries_without_duplicate_comment() {

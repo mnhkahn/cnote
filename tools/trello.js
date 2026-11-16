@@ -347,7 +347,7 @@
   const desc=String(card.desc||'');let meta={};try{const parsed=JSON.parse(desc);if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))meta=parsed;}catch{}
   const line=names=>desc.match(new RegExp('^[ \\t]*(?:'+names+')[ \\t]*[:：][ \\t]*([^\\r\\n]*)','mi'))?.[1].trim()||'';
   const type=meta.type||line('作业类型|类型|type'),title=card.name||'';
-  const kind=/口算/.test(title)||/^(口算|arithmetic)$/i.test(type)?'arithmetic':/^(阅读英语|english_reading|reading)$/.test(type)||/阅读|朗读/.test(title)?'reading':/^(背单词|word_memorization|dictation)$/.test(type)||/单词听写|英语.*听写|听写.*英语|背单词/.test(title)?'dictation':'';
+  const kind=/口算/.test(title)||/^(口算|arithmetic)$/i.test(type)?'arithmetic':/^(阅读英语|english_reading|reading)$/.test(type)||(/英语|英文/.test(title)&&/阅读|朗读/.test(title))||!!meta.reading_text||/^[ \t]*(?:英语|英文)原文[ \t]*[:：]/m.test(desc)?'reading':/^(背单词|word_memorization|dictation)$/.test(type)||/单词听写|英语.*听写|听写.*英语|背单词/.test(title)?'dictation':'';
   const block=names=>{const marker=desc.match(new RegExp('^[ \\t]*(?:'+names+')[ \\t]*[:：][ \\t]*','m'));return marker?desc.slice(marker.index+marker[0].length).split(/\n[ \t]*(?:英语译文|作业要求|打分结果|阅读英语链接|作业类型|预计用时)[ \t]*[:：]/)[0].trim():'';};
   const task=String(meta.task||block('作业内容|task'));
   const count=Number(meta.count||line('本次应完成题数|题数')||title.match(/(\d+)\s*题/)?.[1]||desc.match(/(?:完成|前|共)\s*(\d+)\s*题/)?.[1]||task.split('\n').filter(s=>/[=＝]/.test(s)).length)||'';
