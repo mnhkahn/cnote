@@ -1,6 +1,6 @@
 //! Anonymous SenseVoice transcription, matching cyeam_web/service/homework_reading.go.
 use anyhow::{Context, Result, bail};
-use reqwest::blocking::{Client, Response, multipart};
+use reqwest::blocking::{Response, multipart};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read},
@@ -63,7 +63,7 @@ fn transcribe_at(endpoint: &str, bytes: Vec<u8>, mime: &str) -> Result<Value> {
         .file_name(filename.clone())
         .mime_str(mime)?;
     // No Trello credentials, billing token, redirect, retry, or paid fallback.
-    let client = Client::builder()
+    let client = crate::http::client()
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;

@@ -6,7 +6,9 @@
     "build:tools": "node scripts/build-tools.cjs",
     "check:tools": "node scripts/build-tools.cjs --check",
     "build:web": "node scripts/build-web.cjs",
-    "test:web": "node --test --test-concurrency=1 tests/web.test.cjs"
+    "test:web": "node --test --test-concurrency=1 tests/web.test.cjs",
+    "build:shared-pages": "node scripts/build-shared-pages.cjs",
+    "test:shared-pages": "node --test tests/shared-pages.test.cjs"
   },
   "devDependencies": {
     "@azure/msal-browser": "5.29.1",

@@ -1,0 +1,32 @@
+[package]
+name = "cnote-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+build = "build.rs"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+anyhow = "1"
+async-channel = "2"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+directories = "6"
+html5ever = "0.29.1"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "json", "form", "multipart"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tiny_http = "0.12"
+
+[profile.release]
+strip = "debuginfo"
+lto = "thin"

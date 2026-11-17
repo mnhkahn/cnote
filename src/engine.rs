@@ -56,6 +56,10 @@ pub enum Event {
         generation: u64,
         script: String,
     },
+    #[cfg(cnote_shared_core)]
+    Invalidate {
+        id: String,
+    },
     Selected {
         id: String,
         intent: u64,
@@ -94,6 +98,11 @@ pub enum Event {
     ToolExport {
         filename: String,
         bytes: Vec<u8>,
+    },
+    #[cfg(cnote_shared_core)]
+    SyncStatus {
+        pending: bool,
+        authenticated: bool,
     },
     Closed,
 }
@@ -296,6 +305,10 @@ impl Engine {
             note.baseline = html;
             note.etag = Some(etag);
             self.db.put(&note)?;
+            #[cfg(cnote_shared_core)]
+            self.emit(Event::Invalidate {
+                id: note.id.clone(),
+            });
             self.emit(Event::Title {
                 id: note.id.clone(),
                 title: self.db.display_title(&note.id)?,
@@ -409,6 +422,13 @@ impl Engine {
             self.intent = self.intent.max(v["intent"].as_u64().unwrap_or(self.intent));
         }
         match v["type"].as_str().unwrap_or_default() {
+            #[cfg(cnote_shared_core)]
+            "state" => self.state()?,
+            #[cfg(cnote_shared_core)]
+            "sync_status" => self.emit(Event::SyncStatus {
+                pending: !self.db.pending(&self.account)?.is_empty() || !self.inflight.is_empty(),
+                authenticated: self.authenticated,
+            }),
             "finder_setting" => self.db.set_setting(
                 "finder_enabled",
                 if v["enabled"] == true {
@@ -622,6 +642,56 @@ impl Engine {
                 } else {
                     None
                 };
+                #[cfg(cnote_shared_core)]
+                if self
+                    .cloud
+                    .get(id)
+                    .is_some_and(|(_, etag)| etag == "__cnote_remote_missing__")
+                {
+                    let mut n = owner;
+                    if choice == "cloud" {
+                        self.db.remove(id)?;
+                        if self.selected.as_deref() == Some(id) {
+                            self.selected = None;
+                            self.emit(Event::Load {
+                                intent: self.intent,
+                                id: String::new(),
+                                title: String::new(),
+                                html: String::new(),
+                            });
+                        }
+                    } else {
+                        if let Some(html) = merged {
+                            anyhow::ensure!(html.len() <= 20 * 1024 * 1024, "笔记超过 20 MB");
+                            n.html = html;
+                        }
+                        n.remote_id = None;
+                        n.etag = None;
+                        n.baseline.clear();
+                        n.conflict = false;
+                        n.deleted = false;
+                        n.dirty = true;
+                        n.revision += 1;
+                        self.db.put(&n)?;
+                        if self.selected.as_deref() == Some(id) {
+                            self.emit(Event::Load {
+                                intent: self.intent,
+                                id: n.id.clone(),
+                                title: n.title.clone(),
+                                html: n.html.clone(),
+                            });
+                        }
+                    }
+                    self.db.clear_remote_conflict(id)?;
+                    self.cloud.remove(id);
+                    self.retry.remove(id);
+                    self.inflight.remove(id);
+                    self.next_sync = Instant::now();
+                    self.status = "已处理云端删除，草稿已保存到本机".into();
+                    self.state()?;
+                    self.emit(Event::Dialog { kind: "conflict_result".into(), data: json!({"id":id,"ok":true,"removed":choice=="cloud","html":n.html,"pending_sync":choice!="cloud"}) });
+                    return Ok(());
+                }
                 if let Some((html, etag)) = self.cloud.get(id).cloned() {
                     let mut n = self.db.get(id)?;
                     n.baseline = html.clone();
@@ -641,6 +711,8 @@ impl Engine {
                     }
                     self.db.put(&n)?;
                     self.cloud.remove(id);
+                    #[cfg(cnote_shared_core)]
+                    self.db.clear_remote_conflict(id)?;
                     let result = json!({"id":n.id,"ok":true,"choice":choice,"html":n.html,"pending_sync":n.dirty});
                     if self.selected.as_deref() == Some(id) {
                         self.emit(Event::Load {
@@ -680,6 +752,8 @@ impl Engine {
         Ok(())
     }
     fn conflict(&mut self, mut n: Note, html: String, etag: String) -> Result<()> {
+        #[cfg(cnote_shared_core)]
+        self.db.save_remote_conflict(&n.id, &html, &etag)?;
         n.conflict = true;
         n.deleted = false;
         // A create recovered from a lost HTTP response may already have a remote ID.
@@ -778,8 +852,20 @@ impl Engine {
                 // Preserve any locally changed note that vanished from the cloud as a conflict.
                 for (id, remote, dirty) in self.db.remote_entries(&self.account)? {
                     if !ids.contains(&remote) && !self.inflight.contains(&id) {
-                        if dirty {
+                        if dirty || (cfg!(cnote_shared_core) && self.editing.contains(&id)) {
                             self.db.mark_conflict(&id)?;
+                            #[cfg(cnote_shared_core)]
+                            {
+                                self.db.save_remote_conflict(
+                                    &id,
+                                    "",
+                                    "__cnote_remote_missing__",
+                                )?;
+                                self.cloud.insert(
+                                    id.clone(),
+                                    (String::new(), "__cnote_remote_missing__".into()),
+                                );
+                            }
                             self.status = "云端笔记已移除；本地草稿保留，可导出 HTML".into();
                         } else {
                             self.db.remove(&id)?;
@@ -829,6 +915,8 @@ impl Engine {
                             html: n.html,
                         });
                     } else if changed {
+                        #[cfg(cnote_shared_core)]
+                        self.emit(Event::Invalidate { id: n.id.clone() });
                         self.preload(&n);
                     }
                 } else if n.html == html {
@@ -919,6 +1007,16 @@ pub fn start(path: PathBuf) -> Handle {
                     db.get(id)
                         .is_ok_and(|n| !n.deleted && (n.account.is_empty() || n.account == account))
                 });
+            #[cfg(cnote_shared_core)]
+            let persisted_conflicts = match db.remote_conflicts() {
+                Ok(conflicts) => conflicts,
+                Err(error) => {
+                    let _ = event_tx.send_blocking(Event::Error {
+                        message: format!("无法恢复待处理冲突：{error:#}"),
+                    });
+                    return;
+                }
+            };
             let mut e = Engine {
                 intent: 0,
                 editing: HashSet::new(),
@@ -932,7 +1030,10 @@ pub fn start(path: PathBuf) -> Handle {
                 selected,
                 status: "离线模式 · 笔记保存在本机".into(),
                 inflight: HashSet::new(),
+                #[cfg(not(cnote_shared_core))]
                 cloud: HashMap::new(),
+                #[cfg(cnote_shared_core)]
+                cloud: persisted_conflicts,
                 retry: HashMap::new(),
                 next_sync: Instant::now(),
                 warm_queue: VecDeque::new(),
@@ -1402,6 +1503,54 @@ mod tests {
         e.web(json!({"type":"change","id":n.id,"html":"latest typing","seq":1}))
             .unwrap();
         assert_eq!(e.db.get(&n.id).unwrap().html, "latest typing");
+        assert!(e.db.get(&n.id).unwrap().conflict);
+    }
+    #[cfg(cnote_shared_core)]
+    #[test]
+    fn mobile_conflicts_persist_and_remote_deletion_can_be_resolved() {
+        let mut e = engine();
+        let mut n = e.db.create("Mobile draft", "alice").unwrap();
+        n.remote_id = Some("remote".into());
+        n.etag = Some("v1".into());
+        n.html = "local draft".into();
+        e.db.put(&n).unwrap();
+        e.conflict(n.clone(), "cloud draft".into(), "v2".into())
+            .unwrap();
+        assert_eq!(
+            e.db.remote_conflicts().unwrap()[&n.id],
+            ("cloud draft".into(), "v2".into())
+        );
+        e.cloud.clear();
+        e.cloud = e.db.remote_conflicts().unwrap();
+        e.web(
+            json!({"type":"resolve","id":n.id,"revision":n.revision,"etag":"v2","choice":"mine"}),
+        )
+        .unwrap();
+        assert!(e.db.remote_conflicts().unwrap().is_empty());
+        e.network(0, Reply::List(vec![])).unwrap();
+        assert_eq!(
+            e.db.remote_conflicts().unwrap()[&n.id].1,
+            "__cnote_remote_missing__"
+        );
+        e.web(json!({"type":"resolve","id":n.id,"revision":n.revision,"etag":"__cnote_remote_missing__","choice":"mine"})).unwrap();
+        let restored = e.db.get(&n.id).unwrap();
+        assert!(restored.remote_id.is_none());
+        assert!(restored.etag.is_none());
+        assert!(!restored.conflict);
+        assert!(restored.dirty);
+        assert_eq!(restored.html, "local draft");
+    }
+    #[cfg(cnote_shared_core)]
+    #[test]
+    fn mobile_remote_deletion_never_discards_unpersisted_typing() {
+        let mut e = engine();
+        let mut n = e.db.create("Typing", "alice").unwrap();
+        n.remote_id = Some("remote".into());
+        n.etag = Some("v1".into());
+        n.dirty = false;
+        e.db.put(&n).unwrap();
+        e.editing.insert(n.id.clone());
+        e.network(0, Reply::List(vec![])).unwrap();
         assert!(e.db.get(&n.id).unwrap().conflict);
     }
 }

@@ -18,3 +18,5 @@ __pycache__/
 
 # Isolated browser WASM target.
 /web/core/target/
+
+/shared/core/target/

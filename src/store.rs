@@ -46,6 +46,8 @@ impl Store {
                 modified INTEGER NOT NULL);
             CREATE UNIQUE INDEX IF NOT EXISTS remote_note ON notes(account,remote_id);
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);")?;
+        #[cfg(cnote_shared_core)]
+        db.execute_batch("CREATE TABLE IF NOT EXISTS mobile_conflicts(note_id TEXT PRIMARY KEY,html TEXT NOT NULL,etag TEXT NOT NULL)")?;
         // Keep derived labels separate from the note's file metadata.
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS note_titles (
@@ -249,6 +251,28 @@ impl Store {
     }
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         self.0.execute("INSERT INTO settings VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,value])?;
+        Ok(())
+    }
+    #[cfg(cnote_shared_core)]
+    pub fn save_remote_conflict(&self, id: &str, html: &str, etag: &str) -> Result<()> {
+        self.0.execute(
+            "INSERT OR REPLACE INTO mobile_conflicts VALUES (?1,?2,?3)",
+            params![id, html, etag],
+        )?;
+        Ok(())
+    }
+    #[cfg(cnote_shared_core)]
+    pub fn remote_conflicts(&self) -> Result<std::collections::HashMap<String, (String, String)>> {
+        let mut q=self.0.prepare("SELECT c.note_id,c.html,c.etag FROM mobile_conflicts c JOIN notes n ON n.id=c.note_id WHERE n.conflict=1")?;
+        Ok(
+            q.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
+                .collect::<rusqlite::Result<_>>()?,
+        )
+    }
+    #[cfg(cnote_shared_core)]
+    pub fn clear_remote_conflict(&self, id: &str) -> Result<()> {
+        self.0
+            .execute("DELETE FROM mobile_conflicts WHERE note_id=?1", [id])?;
         Ok(())
     }
     pub fn remove(&self, id: &str) -> Result<()> {

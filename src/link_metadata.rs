@@ -11,7 +11,7 @@ pub fn fetch_title(address: &str) -> Result<String> {
     let url = url::Url::parse(address)?;
     ensure!(matches!(url.scheme(), "http" | "https"));
     ensure!(url.username().is_empty() && url.password().is_none());
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::http::client()
         .timeout(Duration::from_secs(8))
         .redirect(reqwest::redirect::Policy::limited(5))
         .user_agent(concat!("CNote/", env!("CNOTE_APP_VERSION")))

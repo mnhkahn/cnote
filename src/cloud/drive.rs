@@ -1,10 +1,9 @@
 //! File manager requests share the note sync worker's OAuth session.
 use super::*;
 use serde_json::{Value, json};
-use std::{
-    io::Read,
-    path::{Path, PathBuf},
-};
+#[cfg(not(cnote_shared_core))]
+use std::path::PathBuf;
+use std::{io::Read, path::Path};
 
 const SELECT: &str = "id,name,size,folder,file,eTag,lastModifiedDateTime,parentReference";
 fn field<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
@@ -230,6 +229,9 @@ impl Cloud {
             "download" => {
                 let ids = v["ids"].as_array().context("请选择文件")?;
                 anyhow::ensure!(!ids.is_empty() && ids.len() <= 500, "一次最多下载 500 项");
+                #[cfg(cnote_shared_core)]
+                let downloads = crate::platform::downloads()?;
+                #[cfg(not(cnote_shared_core))]
                 let downloads = directories::UserDirs::new()
                     .and_then(|d| d.download_dir().map(PathBuf::from))
                     .context("找不到下载目录")?;

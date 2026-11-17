@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::{io::Read, time::Duration};
 
 fn client() -> Result<Client> {
-    Ok(Client::builder()
+    Ok(crate::http::client()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(180))
         .redirect(reqwest::redirect::Policy::none())
@@ -38,6 +38,12 @@ pub fn review(v: &Value, bytes: Vec<u8>, mime: &str) -> Result<Value> {
     review_at("https://www.cyeam.com", v, bytes, mime)
 }
 fn review_at(base: &str, v: &Value, bytes: Vec<u8>, mime: &str) -> Result<Value> {
+    review_uploads_at(base, v, vec![(bytes, mime.to_owned())])
+}
+pub fn review_images(v: &Value, uploads: Vec<(Vec<u8>, String)>) -> Result<Value> {
+    review_uploads_at("https://www.cyeam.com", v, uploads)
+}
+fn review_uploads_at(base: &str, v: &Value, uploads: Vec<(Vec<u8>, String)>) -> Result<Value> {
     let kind = v["kind"].as_str().unwrap_or_default();
     anyhow::ensure!(
         matches!(kind, "arithmetic" | "dictation" | "reading"),
@@ -45,33 +51,8 @@ fn review_at(base: &str, v: &Value, bytes: Vec<u8>, mime: &str) -> Result<Value>
     );
     let reading = kind == "reading";
     anyhow::ensure!(
-        !bytes.is_empty() && bytes.len() <= if reading { 15 } else { 10 } * 1024 * 1024,
-        "附件为空或超过批改上限（图片10MB，录音15MB）"
-    );
-    let mime = match mime {
-        "audio/x-m4a" => "audio/mp4",
-        "audio/x-wav" => "audio/wav",
-        other => other,
-    };
-    let extension = match mime {
-        "image/jpeg" => "jpg",
-        "image/png" => "png",
-        "image/webp" => "webp",
-        "audio/mp4" => "m4a",
-        "audio/mpeg" => "mp3",
-        "audio/wav" => "wav",
-        "audio/webm" => "webm",
-        "audio/ogg" => "ogg",
-        "audio/aac" => "aac",
-        "audio/flac" => "flac",
-        "audio/amr" => "amr",
-        "audio/3gpp" => "3gp",
-        "audio/opus" => "opus",
-        _ => anyhow::bail!("请使用JPG、PNG、WebP图片或支持的朗读录音"),
-    };
-    anyhow::ensure!(
-        reading == mime.starts_with("audio/"),
-        "附件与作业类型不匹配"
+        !uploads.is_empty() && uploads.len() <= if reading { 1 } else { 2 },
+        "请提交1至2张作业图片或一段录音"
     );
     let mut form = multipart::Form::new().text("kind", kind.to_owned());
     match kind {
@@ -93,15 +74,53 @@ fn review_at(base: &str, v: &Value, bytes: Vec<u8>, mime: &str) -> Result<Value>
         }
         _ => unreachable!(),
     }
-    let part = multipart::Part::bytes(bytes)
-        .file_name(format!("homework.{extension}"))
-        .mime_str(mime)?;
+    for (index, (bytes, mime)) in uploads.into_iter().enumerate() {
+        let mime = mime.as_str();
+        anyhow::ensure!(
+            !bytes.is_empty() && bytes.len() <= if reading { 15 } else { 10 } * 1024 * 1024,
+            "附件为空或超过批改上限（图片10MB，录音15MB）"
+        );
+        let mime = match mime {
+            "audio/x-m4a" => "audio/mp4",
+            "audio/x-wav" => "audio/wav",
+            other => other,
+        };
+        let extension = match mime {
+            "image/jpeg" => "jpg",
+            "image/png" => "png",
+            "image/webp" => "webp",
+            "audio/mp4" => "m4a",
+            "audio/mpeg" => "mp3",
+            "audio/wav" => "wav",
+            "audio/webm" => "webm",
+            "audio/ogg" => "ogg",
+            "audio/aac" => "aac",
+            "audio/flac" => "flac",
+            "audio/amr" => "amr",
+            "audio/3gpp" => "3gp",
+            "audio/opus" => "opus",
+            _ => anyhow::bail!("请使用JPG、PNG、WebP图片或支持的朗读录音"),
+        };
+        anyhow::ensure!(
+            reading == mime.starts_with("audio/"),
+            "附件与作业类型不匹配"
+        );
+        let filename = if index == 0 {
+            format!("homework.{extension}")
+        } else {
+            format!("homework-{}.{extension}", index + 1)
+        };
+        let part = multipart::Part::bytes(bytes)
+            .file_name(filename)
+            .mime_str(mime)?;
+        form = form.part(if reading { "audio" } else { "image" }, part);
+    }
     let endpoint = if reading { "reading" } else { "review" };
     response(
         client()?
             .post(format!("{base}/api/homework/{endpoint}"))
             .header("Accept", "application/json")
-            .multipart(form.part(if reading { "audio" } else { "image" }, part))
+            .multipart(form)
             .send()
             .map_err(|_| anyhow::anyhow!("批改连接失败或超时，请重试"))?,
     )
@@ -237,6 +256,47 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn uploads_two_images_in_order() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", server.server_addr());
+        let worker = std::thread::spawn(move || {
+            let mut request = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            let mut body = String::new();
+            request.as_reader().read_to_string(&mut body).unwrap();
+            assert_eq!(body.matches("name=\"image\"").count(), 2);
+            assert!(body.find("first page").unwrap() < body.find("second page").unwrap());
+            assert!(body.contains("homework-2.png"));
+            request
+                .respond(tiny_http::Response::from_string(
+                    r#"{"input":{},"report":{"total":10}}"#,
+                ))
+                .unwrap();
+        });
+        let result = review_uploads_at(
+            &base,
+            &serde_json::json!({"kind":"arithmetic","count":10}),
+            vec![
+                (b"first page".to_vec(), "image/jpeg".into()),
+                (b"second page".to_vec(), "image/png".into()),
+            ],
+        )
+        .unwrap();
+        worker.join().unwrap();
+        assert_eq!(result["report"]["total"], 10);
+        assert!(
+            review_uploads_at(
+                "http://127.0.0.1:1",
+                &serde_json::json!({"kind":"arithmetic","count":10}),
+                vec![]
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn reads_textbook_without_executing_source() {
         let source = "const books=[{articles: [{text: `First`}, {text: `Second`}]}, {articles: [{text: `Third`}]}];";

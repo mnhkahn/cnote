@@ -19,7 +19,13 @@ const AUTH: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0";
 const GRAPH: &str = "https://graph.microsoft.com/v1.0";
 const CLIENT_ID: &str = "e1f582c1-1568-4347-8c5b-1906164e637f";
 const SCOPES: &str = "Files.ReadWrite User.Read offline_access";
+#[path = "cloud/drive.rs"]
 mod drive;
+#[cfg(not(cnote_shared_core))]
+#[path = "cloud/finder.rs"]
+pub mod finder;
+#[cfg(cnote_shared_core)]
+#[path = "cloud/finder_unavailable.rs"]
 pub mod finder;
 #[derive(Debug)]
 pub enum Job {
@@ -458,7 +464,7 @@ pub fn spawn(
     std::thread::Builder::new()
         .name("cnote-network".into())
         .spawn(move || {
-            let client = match Client::builder()
+            let client = match crate::http::client()
                 .timeout(Duration::from_secs(25))
                 .connect_timeout(Duration::from_secs(10))
                 .user_agent(concat!("CNote/", env!("CNOTE_APP_VERSION")))

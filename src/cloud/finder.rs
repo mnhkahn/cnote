@@ -16,8 +16,10 @@ use std::{
 };
 use tiny_http::{Header, Request, Response as DavResponse, Server, StatusCode as DavStatus};
 
+#[path = "finder/graph.rs"]
 mod graph;
 #[cfg(test)]
+#[path = "finder/tests.rs"]
 mod tests;
 
 #[derive(Debug)]

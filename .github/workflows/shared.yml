@@ -1,0 +1,73 @@
+name: Shared core and pages
+on:
+  push:
+    branches: ['**']
+    tags: ['shared-v[0-9]*.[0-9]*.[0-9]*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: shared-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: shared/core
+      - run: cargo fmt --manifest-path shared/core/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path shared/core/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo test --manifest-path shared/core/Cargo.toml --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:shared-pages
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Package portable sources and pages
+        shell: bash
+        run: |
+          version=development
+          if [[ "$GITHUB_REF" == refs/tags/shared-v* ]]; then
+            version="${GITHUB_REF_NAME#shared-v}"
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          fi
+          python3 scripts/build-shared-source.py --version "$version"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cnote-shared
+          path: dist/shared/
+          if-no-files-found: error
+  publish:
+    if: startsWith(github.ref, 'refs/tags/shared-v') && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cnote-shared
+          path: sdk
+      - name: Publish versioned SDK assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --latest=false --title "CNote Shared ${RELEASE_TAG#shared-v}" --notes 'Portable Rust core sources and shared pages. Protocol v1. Platform packaging lives in consumer repositories.' sdk/cnote-shared.tar.gz sdk/cnote-shared.tar.gz.sha256 sdk/shared.json

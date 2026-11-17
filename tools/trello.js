@@ -17,7 +17,7 @@
   const panel=document.getElementById('trello-content');panel.replaceChildren();const box=node('div',null,'trello-guide');
   box.append(node('h2',connected?'Trello 关联设置':'关联你的 Trello 看板'),node('p',error||'连接 Trello 后，在这里按截止日期查看每天的卡片进度。'));
   if(connected&&!reauthorize){
-   if(settings){box.append(node('p','已关联 · 自动保持连接'),node('p','凭据已保存到系统钥匙串。重启 CNote 会自动恢复，无需重复输入。'),button('返回看板',()=>loadBoards()),button('更换账号或重新授权',()=>guide('',true,true)));}
+   if(settings){box.append(node('p','已关联 · 自动保持连接'),node('p',window.cnotePlatform?.mobile?'凭据已保存到系统安全存储。重启 CNote 会自动恢复，无需重复输入。':'凭据已保存到系统钥匙串。重启 CNote 会自动恢复，无需重复输入。'),button('返回看板',()=>loadBoards()),button('更换账号或重新授权',()=>guide('',true,true)));}
    else box.append(button('重新加载看板',()=>loadBoards()),button('关联设置',()=>guide('',true)));
    addDisconnect(box);panel.append(box);return;
   }
@@ -376,11 +376,14 @@
   const reading=fields.kind==='reading';
   const candidates=attachments.filter(a=>a.isUpload!==false&&(reading?/^audio\//.test(a.mimeType||'')||/\.(m4a|mp3|wav|webm|ogg|aac|flac|amr|3gp|opus)$/i.test(a.name||''):/^image\/(jpeg|png|webp)$/.test(a.mimeType||'')||/\.(jpe?g|png|webp)$/i.test(a.name||''))).sort((a,b)=>String(b.date||b.id).localeCompare(String(a.date||a.id)));
   const attachment=candidates[0];
+  // Tablet attachments carry one UUID per submission. Keep older submissions out.
+  const submission=a=>String(a?.name||'').match(/_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.[^.]+$/i)?.[1];
+  const group=!reading&&submission(attachment)?candidates.filter(a=>submission(a)===submission(attachment)).sort((a,b)=>String(a.date||a.id).localeCompare(String(b.date||b.id))):attachment?[attachment]:[];
   let publicationPending=false,reviewing=false,loading=false;
-  const missing=()=>!attachment?(reading?'暂无朗读录音，请先提交作业。':'暂无作业图片，请先提交作业。'):reading&&!fields.reference?'卡片缺少英文原文，请补充作业描述。':fields.kind==='dictation'&&!fields.words?'卡片缺少听写词表，请补充作业描述。':fields.kind==='arithmetic'&&(!Number.isInteger(fields.count)||fields.count<1||fields.count>100)?'卡片缺少本次应完成题数（1～100），请补充作业描述。':'';
+  const missing=()=>group.length>2?'同一次提交超过2张图片，请分批批改。':!attachment?(reading?'暂无朗读录音，请先提交作业。':'暂无作业图片，请先提交作业。'):reading&&!fields.reference?'卡片缺少英文原文，请补充作业描述。':fields.kind==='dictation'&&!fields.words?'卡片缺少听写词表，请补充作业描述。':fields.kind==='arithmetic'&&(!Number.isInteger(fields.count)||fields.count<1||fields.count>100)?'卡片缺少本次应完成题数（1～100），请补充作业描述。':'';
   const submit=button('开始自动阅卷',async()=>{
    if(submit.disabled)return;
-   const extra={kind:fields.kind,attachment:attachment.id,...(reading?{reference:fields.reference}:fields.kind==='dictation'?{words:fields.words}:{count:fields.count})},key=cacheKey();
+   const extra={kind:fields.kind,attachment:attachment.id,...(!reading?{attachments:group.map(a=>a.id)}:{}),...(reading?{reference:fields.reference}:fields.kind==='dictation'?{words:fields.words}:{count:fields.count})},key=cacheKey();
    reviewing=true;sync();status.textContent='正在阅卷并保存结果…';actions.replaceChildren();
    try{const data=await request('review_homework',card.id,extra);homeworkResults.set(key,data);if(epoch===detailEpoch)display(data,true);}
    catch(error){if(epoch===detailEpoch)status.textContent='阅卷失败：'+error.message;}
@@ -388,7 +391,7 @@
   },'primary');
   section.append(node('h3','自动阅卷'),submit,status,actions);body.append(section);
   const sync=()=>{submit.disabled=publicationPending||reviewing||loading||!!missing();};
-  const cacheKey=()=>JSON.stringify([card.id,fields.kind,attachment?.id,reading?fields.reference:fields.kind==='dictation'?fields.words:String(fields.count)]);
+  const cacheKey=()=>JSON.stringify([card.id,fields.kind,group.map(a=>a.id),reading?fields.reference:fields.kind==='dictation'?fields.words:String(fields.count)]);
   const applyPublication=data=>{
    if(!data.card)return;
    Object.assign(card,data.card);const index=cards.findIndex(c=>c.id===card.id);if(index>=0)cards[index]={...cards[index],...data.card};

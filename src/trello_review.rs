@@ -22,8 +22,12 @@ struct Store {
 impl Store {
     fn open(card: &str) -> Result<Self> {
         identifier(&json!({"id":card}))?;
+        #[cfg(cnote_shared_core)]
+        let dir = crate::platform::data()?.join("homework-reviews");
+        #[cfg(not(cnote_shared_core))]
         let dirs = directories::ProjectDirs::from("com", "cyeam", "CNote")
             .context("找不到批改结果目录")?;
+        #[cfg(not(cnote_shared_core))]
         let dir = dirs.data_dir().join("homework-reviews");
         std::fs::create_dir_all(&dir)?;
         let mut options = OpenOptions::new();
@@ -351,13 +355,35 @@ pub(super) fn review(api: &Api, v: &Value) -> Result<Value> {
     if let Some(mut pending) = store.load()?.filter(|r| !r.done) {
         return Ok(run(api, card, &store, &mut pending));
     }
-    let id = identifier(&json!({"id":v["attachment"]}))?.to_owned();
-    let data = api.attachment(card, &id, true)?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data["base64"].as_str().context("附件数据缺失")?)?;
-    let mut result =
-        crate::homework::review(v, bytes, data["mime"].as_str().context("附件格式缺失")?)?;
-    result["source_attachment"] = v["attachment"].clone();
+    let ids = match v.get("attachments") {
+        Some(value) => value.as_array().context("无效的附件列表")?.clone(),
+        None => vec![v["attachment"].clone()],
+    };
+    let reading = v["kind"] == "reading";
+    anyhow::ensure!(
+        !ids.is_empty() && ids.len() <= if reading { 1 } else { 2 },
+        "请提交1至2张作业图片或一段录音"
+    );
+    let mut uploads = Vec::new();
+    for (index, id) in ids.iter().enumerate() {
+        anyhow::ensure!(!ids[..index].contains(id), "附件重复，请重新打开卡片");
+        let id = identifier(&json!({"id":id}))?.to_owned();
+        let data = api.attachment(card, &id, true)?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data["base64"].as_str().context("附件数据缺失")?)?;
+        uploads.push((
+            bytes,
+            data["mime"].as_str().context("附件格式缺失")?.to_owned(),
+        ));
+    }
+    let mut result = if reading {
+        let (bytes, mime) = uploads.pop().unwrap();
+        crate::homework::review(v, bytes, &mime)?
+    } else {
+        crate::homework::review_images(v, uploads)?
+    };
+    result["source_attachment"] = ids[0].clone();
+    result["source_attachments"] = json!(ids);
     let mut review = Review {
         review_id: uuid::Uuid::new_v4().to_string(),
         result,

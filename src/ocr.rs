@@ -1,5 +1,7 @@
 //! On-device Apple Vision OCR, adapted from cyeam-cli's native bridge.
-use anyhow::{Context, Result};
+#[cfg(target_os = "macos")]
+use anyhow::Context;
+use anyhow::Result;
 use serde_json::Value;
 
 pub fn recognize(bytes: Vec<u8>) -> Result<Value> {

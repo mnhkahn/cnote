@@ -99,7 +99,7 @@ struct Api {
 }
 impl Api {
     fn new(auth: Credentials) -> Result<Self> {
-        let client = Client::builder()
+        let client = crate::http::client()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
@@ -828,7 +828,7 @@ mod tests {
                 write!(stream,"HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
             });
             let api = Api {
-                client: Client::builder().no_proxy().build().unwrap(),
+                client: crate::http::client().no_proxy().build().unwrap(),
                 auth: Credentials {
                     key: "test-key".into(),
                     token: "secret-token".into(),
@@ -890,7 +890,7 @@ mod tests {
                 write!(stream,"HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
             });
             let api = Api {
-                client: Client::builder().no_proxy().build().unwrap(),
+                client: crate::http::client().no_proxy().build().unwrap(),
                 auth: Credentials {
                     key: "test-key".into(),
                     token: "secret-token".into(),

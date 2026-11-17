@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(cnote_shared_core)");
     println!("cargo:rerun-if-env-changed=CNOTE_TRELLO_API_KEY");
     println!("cargo:rerun-if-env-changed=CNOTE_APP_VERSION");
     let version = std::env::var("CNOTE_APP_VERSION")

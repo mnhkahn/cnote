@@ -546,7 +546,7 @@
    case 'delete':deleteNote(data.id,data.title);break;
    case 'focus':document.body.classList.toggle('focus');break;
    case 'save':setTimeout(()=>{window.cnoteTools?.flush();syncRequested=true;flushAll();finishSync();},0);break;
-   case 'close':case 'login':case 'logout':(window.cnoteTools?.barrier||((next)=>next()))(()=>barrier(()=>{
+   case 'close':case 'login':case 'logout':case 'install_update':(window.cnoteTools?.barrier||((next)=>next()))(()=>barrier(()=>{
     if(type==='logout'){warmups.clear();syncRequested=false;for(const n of notes.values())dispose(n);notes.clear();}
     navigate(type,data);
    }));break;
@@ -619,5 +619,5 @@
    }
   }
  }
- window.cnote={action,receive,flush,sanitize,formatShortcut,pastePlain,shortcuts,focusEditor:restore};post({type:'ready'});
+ window.cnote={action,receive,flush,flushAll,sanitize,formatShortcut,pastePlain,shortcuts,focusEditor:restore};post({type:'ready'});
 })();
