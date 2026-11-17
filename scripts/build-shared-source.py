@@ -4,7 +4,7 @@ import argparse, hashlib, json, os, subprocess, tarfile, tempfile
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PREFIXES = ('src/', 'editor/', 'tools/', 'assets/', 'shared/core/', 'shared/pages/')
-FILES = {'Cargo.toml', 'Cargo.lock', 'build.rs', 'LICENSE', 'scripts/build-shared-pages.cjs'}
+FILES = {'Cargo.toml', 'Cargo.lock', 'build.rs', 'LICENSE', 'scripts/build-shared-pages.cjs', 'scripts/build-shared-source.py', 'tests/ocr-text.png', 'shared/README.md'}
 def sources():
     names = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard'], cwd=ROOT, text=True).splitlines()
     return [name for name in sorted(set(names)) if (name.startswith(PREFIXES) or name in FILES) and (ROOT/name).is_file() and 'target' not in Path(name).parts]
