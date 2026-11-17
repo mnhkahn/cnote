@@ -20,11 +20,11 @@ python3 scripts/build-shared-source.py --version development
 
 输出 `dist/shared/cnote-shared.tar.gz`、`shared.json` 和 SHA-256 文件。压缩包包含通用核心所需源码、资源和已生成页面。元信息记录协议、版本、源提交、未提交状态、源码摘要和包摘要；构建期间源码变化会拒绝产出。
 
-`.github/workflows/shared.yml` 测试核心和页面并上传通用包。推送 `shared-vX.Y.Z` 标签才创建独立共享 Release，使用 `--latest=false`，不改变桌面应用的最新 Release。本仓库不再生成 SO 或 AAR：这些都由平台项目根据自己的目标架构构建。
+`.github/workflows/shared.yml` 测试核心和页面并上传通用包。推送 CNote 原有版本标签（如 `v0.3.0`）时，`release.yml` 调用该工作流构建共享包，与 Mac 和 Web 产物一起上传到同一个 CNote Release；没有独立共享标签或独立 Release。普通分支和手动运行只生成 artifact，不发布。本仓库不再生成 SO 或 AAR：这些都由平台项目根据自己的目标架构构建。
 
 ## Android 消费
 
-`cnote-android/shared-sdk.lock.json` 固定本仓库的共享 Release。安卓 CI 下载并校验源码与页面，在安卓仓库中使用 NDK 编译 SO、JNI，并生成 AAR 和 APK。更新这个固定版本即可获取新的共享业务与页面。
+`cnote-android/shared-sdk.json` 只配置仓库和兼容要求，不固定版本。安卓每次构建解析本仓库的最新正式 Release，并固定本次解析到的 tag 下载源码与页面，校验后使用 NDK 编译 SO、JNI，生成 AAR 和 APK。发布新的 CNote 版本后，安卓下次构建会自动使用新的共享业务与页面。
 
 本地联调在 `cnote-android` 执行：
 
@@ -33,6 +33,6 @@ python3 scripts/prepare-sdk.py --local ../cnote
 ./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-JNI、Keystore、旧安卓数据库迁移、Android TLS、WebView、后台任务、系统分享和 AAR 构建的说明见安卓仓库 README。初始锁定的 `shared-v0.1.0` 尚需实际发布后，远端 CI 才能下载；本地联调可以直接使用当前工作区。
+JNI、Keystore、旧安卓数据库迁移、Android TLS、WebView、后台任务、系统分享和 AAR 构建的说明见安卓仓库 README。已有旧版本（如 `v0.3.0`）需要补上传共享包；采用统一发布流程后的版本会自动包含共享包。安卓只使用最新正式 Release，记录实际版本与提交，不会混用多个版本的文件。本地联调可以直接使用当前工作区。
 
 共享数据库由 Rust SQLite 独占，宿主通过命令/事件读写，不用其他 SQLite 实现同时打开同一数据库。Mac 的 GPUI、AppKit、钥匙串、Finder、主题和全部工具继续保留；现有 Web/WASM 构建也保持独立。

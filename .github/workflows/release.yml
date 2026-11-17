@@ -105,9 +105,14 @@ jobs:
     permissions:
       contents: read
 
+  shared:
+    uses: ./.github/workflows/shared.yml
+    permissions:
+      contents: read
+
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [build, web]
+    needs: [build, web, shared]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -127,13 +132,30 @@ jobs:
         run: |
           (cd web-release && sha256sum -c cnote-web.tar.gz.sha256)
           cp web-release/cnote-web.tar.gz web-release/cnote-web.tar.gz.sha256 release-assets/
+      - uses: actions/download-artifact@v4
+        with:
+          name: cnote-shared
+          path: shared-release
+      - name: Verify and include shared core and pages
+        shell: bash
+        run: |
+          (cd shared-release && sha256sum -c cnote-shared.tar.gz.sha256)
+          python3 - <<'PYVERIFY'
+          import json, os
+          from pathlib import Path
+          metadata = json.loads(Path('shared-release/shared.json').read_text())
+          assert metadata['version'] == os.environ['RELEASE_TAG'].lstrip('vV'), 'Shared version differs from CNote tag'
+          assert metadata['commit'] == os.environ['GITHUB_SHA'], 'Shared source commit differs from release'
+          assert not metadata['dirty'], 'Shared source tree is dirty'
+          PYVERIFY
+          cp shared-release/cnote-shared.tar.gz shared-release/cnote-shared.tar.gz.sha256 shared-release/shared.json release-assets/
       - name: Create release if needed and upload packages
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
-          # Publish only after both macOS architectures and the notes Web package pass.
+          # Publish all packages together after macOS, Web and shared core builds pass.
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --verify-tag --generate-notes --title "CNote $RELEASE_TAG" --draft
           fi
