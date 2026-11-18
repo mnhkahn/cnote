@@ -31,7 +31,7 @@ test('button follows association settings and downloads only the selected date',
  assert.equal(manifests[0].id,'today');assert.equal(manifests[0].date,'2026-11-18');assert.equal(manifests[0].name,'语文');
  const files=p.calls.filter(m=>m.op==='download_homework_attachment');assert.equal(files.length,2);
  assert.equal(files[0].name,'2026-11-18_语文_图一.jpg');assert.equal(files[1].name,'2026-11-18_语文_音频一.m4a');
- assert.match(p.status.textContent,/已下载 2 个附件到下载目录/);assert.equal(p.control.disabled,false);
+ assert.match(p.status.textContent,/已下载 2 个附件到下载目录\/CNote/);assert.equal(p.control.disabled,false);
 });
 test('partial failures continue and duplicate clicks do not start another batch',async()=>{
  const p=await planner(m=>m.op==='download_homework_attachment'&&m.attachment==='image'?{message:'文件下载失败'}:null);

@@ -194,7 +194,7 @@
     try{await request('download_homework_attachment',file.card,{attachment:file.id,name:file.name});saved++;}
     catch(error){if(error.code==='download_permission_denied')throw error;failed.push(`${file.name}：${error.message}`);}
    }
-   message((saved?`${date} 已下载 ${saved} 个附件到下载目录`:failed.length?`${date} 未下载成功`:`${date} 没有可下载的图片或音频`)+(failed.length?`；${failed.length} 项失败：${failed.slice(0,3).join('；')}`:''),!!failed.length);
+   message((saved?`${date} 已下载 ${saved} 个附件到下载目录/CNote`:failed.length?`${date} 未下载成功`:`${date} 没有可下载的图片或音频`)+(failed.length?`；${failed.length} 项失败：${failed.slice(0,3).join('；')}`:''),!!failed.length);
   }catch(error){message(`下载已停止，已保存 ${saved} 个附件：${error.message}`,true);}
   finally{downloadingHomework=false;updateHomeworkDownload();}
  }

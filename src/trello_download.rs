@@ -188,11 +188,14 @@ mod tests {
     #[test]
     fn downloads_do_not_overwrite_existing_files_or_escape_the_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let first = save_file(dir.path(), "2026-11-18_语文_图一.jpg", b"original").unwrap();
-        let second = save_file(dir.path(), "2026-11-18_语文_图一.jpg", b"second").unwrap();
+        let directory = dir.path().join("CNote");
+        let first = save_file(&directory, "2026-11-18_语文_图一.jpg", b"original").unwrap();
+        let second = save_file(&directory, "2026-11-18_语文_图一.jpg", b"second").unwrap();
+        assert_eq!(first.parent(), Some(directory.as_path()));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
         assert_ne!(first, second);
         assert_eq!(std::fs::read(first).unwrap(), b"original");
         assert_eq!(std::fs::read(second).unwrap(), b"second");
-        assert!(save_file(dir.path(), "../escape.jpg", b"bad").is_err());
+        assert!(save_file(&directory, "../escape.jpg", b"bad").is_err());
     }
 }

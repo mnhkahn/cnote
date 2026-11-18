@@ -848,7 +848,7 @@ impl Notebook {
         let request = v["request"].as_u64().unwrap_or(0);
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move {
-                let directory = directories::UserDirs::new().and_then(|dirs| dirs.download_dir().map(PathBuf::from)).ok_or_else(|| anyhow::anyhow!("找不到系统下载目录"))?;
+                let directory = directories::UserDirs::new().and_then(|dirs| dirs.download_dir().map(PathBuf::from)).ok_or_else(|| anyhow::anyhow!("找不到系统下载目录"))?.join("CNote");
                 let name = v["name"].as_str().ok_or_else(|| anyhow::anyhow!("缺少作业文件名"))?.to_owned();
                 let (bytes, mime) = Self::trello_original_media(v, "", "附件")?;
                 anyhow::ensure!(mime.starts_with("image/") || mime.starts_with("audio/"), "此附件不是图片或音频");
