@@ -27,6 +27,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: npm run test:trello-download
+      - run: npm run test:mobile-state
       - name: Validate shared page generation
         run: node scripts/build-shared-pages.cjs
   build:

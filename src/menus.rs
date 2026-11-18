@@ -291,7 +291,7 @@ pub fn set_menus(cx: &mut App, theme: Theme) {
             MenuItem::action("文本处理", ShowText),
             MenuItem::action("文本对比", ShowDiff),
             MenuItem::action("CSV 表格", ShowCsv),
-            MenuItem::action("Trello 日历", ShowTrello),
+            MenuItem::action("作业", ShowTrello),
             MenuItem::action("OneDrive", ShowOneDrive),
             MenuItem::separator(),
             MenuItem::action("显示 / 隐藏侧栏", ToggleSidebar),

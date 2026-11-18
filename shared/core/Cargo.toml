@@ -16,6 +16,7 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 directories = "6"
 html5ever = "0.29.1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "json", "form", "multipart"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

@@ -42,7 +42,7 @@ MSAL v5 使用独立回调桥接页，参考 https://learn.microsoft.com/en-us/e
 
 `cyeam_web` 在自己的部署 Action 中获取最新正式 Release、校验压缩包及内部文件，再放入 Docker 构建上下文。它不在 Docker 内编译 Rust，也不依赖 Actions 临时产物。网站部署仍由网站自己的推送或手动部署触发；CNote 发布不会自动触发网站部署。
 
-宿主会把配置中的 `redirectUri` 设为固定的 `/note/auth.html`，因此版本资源目录变化不需要重复登记回调。该地址仍需在 Microsoft 应用中登记为 SPA redirect URI。
+`cyeam_web` 宿主把 `redirectUri` 设为原先已登记的 `/note`，不要求新增 `/note/auth.html`。该入口收到授权响应时只加载现有 `auth.js` 桥接脚本，正常访问才跳转到版本化笔记页；不会在登录弹窗里初始化 WASM、打开 IndexedDB 或争抢 Web Lock。旧的独立回调页仍保留，方便其他静态宿主使用。
 
 ## 手机布局
 

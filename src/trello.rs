@@ -1,4 +1,6 @@
 //! Native Trello API client. User credentials live only in Keychain.
+#[path = "trello_download.rs"]
+pub mod download;
 #[path = "trello_review.rs"]
 mod review;
 use anyhow::{Context, Result, bail};
@@ -430,8 +432,17 @@ pub fn request(v: Value) -> Result<Value> {
             session.auth = None;
             return Ok(json!({"connected":false}));
         }
-        "boards" | "board" | "card" | "attachment" | "recognize_image" | "transcribe_audio"
-        | "update_cell" | "review_homework" | "publish_homework" | "reading_source" => {}
+        "boards"
+        | "board"
+        | "card"
+        | "attachment"
+        | "recognize_image"
+        | "transcribe_audio"
+        | "homework_attachments"
+        | "update_cell"
+        | "review_homework"
+        | "publish_homework"
+        | "reading_source" => {}
         _ => bail!("未知的 Trello 操作"),
     }
     let api = Api::new(session.auth()?.ok_or(AuthRequired)?)?;
@@ -482,6 +493,15 @@ pub fn request(v: Value) -> Result<Value> {
         "review_homework" => review::review(&api, &v),
         "publish_homework" => review::retry(&api, &v),
         "reading_source" => crate::homework::reading_source(v["link"].as_str().unwrap_or_default()),
+        "homework_attachments" => {
+            let id = identifier(&v)?;
+            let attachments = api.get(&format!("/cards/{id}/attachments"), &[])?;
+            download::plan(
+                v["name"].as_str().unwrap_or("作业"),
+                v["date"].as_str().unwrap_or_default(),
+                &attachments,
+            )
+        }
         "attachment" | "recognize_image" | "transcribe_audio" => {
             let card = identifier(&v)?;
             let id = v["attachment"].as_str().unwrap_or("");

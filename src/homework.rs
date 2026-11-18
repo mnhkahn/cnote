@@ -4,6 +4,9 @@ use reqwest::blocking::{Client, multipart};
 use serde_json::Value;
 use std::{io::Read, time::Duration};
 
+#[path = "homework_image.rs"]
+mod pencil_image;
+
 fn client() -> Result<Client> {
     Ok(crate::http::client()
         .connect_timeout(Duration::from_secs(10))
@@ -105,6 +108,15 @@ fn review_uploads_at(base: &str, v: &Value, uploads: Vec<(Vec<u8>, String)>) -> 
             reading == mime.starts_with("audio/"),
             "附件与作业类型不匹配"
         );
+        let (bytes, mime, extension) = if kind == "arithmetic" {
+            (pencil_image::enhance(&bytes)?, "image/png", "png")
+        } else {
+            (bytes, mime, extension)
+        };
+        anyhow::ensure!(
+            bytes.len() <= if reading { 15 } else { 10 } * 1024 * 1024,
+            "处理后的作业附件过大"
+        );
         let filename = if index == 0 {
             format!("homework.{extension}")
         } else {
@@ -173,6 +185,17 @@ fn textbook_text(source: &str, book: usize, article: usize) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_photo(shade: u8) -> Vec<u8> {
+        let mut pixels = image::GrayImage::from_pixel(32, 32, image::Luma([220]));
+        for y in 4..28 {
+            pixels.get_pixel_mut(4 + u32::from(shade) % 24, y)[0] = shade;
+        }
+        let mut output = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageLuma8(pixels)
+            .write_to(&mut output, image::ImageFormat::Png)
+            .unwrap();
+        output.into_inner()
+    }
     #[test]
     fn rejects_invalid_upload_before_network() {
         for v in [
@@ -219,8 +242,9 @@ mod tests {
                             .iter()
                             .any(|h| h.field.equiv("Authorization"))
                     );
-                    let mut body = String::new();
-                    request.as_reader().read_to_string(&mut body).unwrap();
+                    let mut body = Vec::new();
+                    request.as_reader().read_to_end(&mut body).unwrap();
+                    let body = String::from_utf8_lossy(&body);
                     assert!(body.contains(&format!("name=\"{field}\"")));
                     assert!(body.contains(if kind == "reading" {
                         "name=\"audio\""
@@ -244,7 +268,11 @@ mod tests {
                 let result = review_at(
                     &base,
                     &serde_json::json!({"kind":kind,"count":20,"words":"bus stop\ncamera","reference":"We read together."}),
-                    b"test upload".to_vec(),
+                    if kind == "arithmetic" {
+                        test_photo(190)
+                    } else {
+                        b"test upload".to_vec()
+                    },
                     mime,
                 );
                 worker.join().unwrap();
@@ -260,16 +288,30 @@ mod tests {
     fn uploads_two_images_in_order() {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let base = format!("http://{}", server.server_addr());
+        let first = test_photo(190);
+        let second = test_photo(180);
+        let enhanced_first = pencil_image::enhance(&first).unwrap();
+        let enhanced_second = pencil_image::enhance(&second).unwrap();
         let worker = std::thread::spawn(move || {
             let mut request = server
                 .recv_timeout(Duration::from_secs(5))
                 .unwrap()
                 .unwrap();
-            let mut body = String::new();
-            request.as_reader().read_to_string(&mut body).unwrap();
-            assert_eq!(body.matches("name=\"image\"").count(), 2);
-            assert!(body.find("first page").unwrap() < body.find("second page").unwrap());
-            assert!(body.contains("homework-2.png"));
+            let mut body = Vec::new();
+            request.as_reader().read_to_end(&mut body).unwrap();
+            let text = String::from_utf8_lossy(&body);
+            assert_eq!(text.matches("name=\"image\"").count(), 2);
+            let first_at = body
+                .windows(enhanced_first.len())
+                .position(|v| v == enhanced_first)
+                .unwrap();
+            let second_at = body
+                .windows(enhanced_second.len())
+                .position(|v| v == enhanced_second)
+                .unwrap();
+            assert!(first_at < second_at);
+            assert!(text.contains("homework-2.png"));
+            assert_eq!(text.matches("Content-Type: image/png").count(), 2);
             request
                 .respond(tiny_http::Response::from_string(
                     r#"{"input":{},"report":{"total":10}}"#,
@@ -279,10 +321,7 @@ mod tests {
         let result = review_uploads_at(
             &base,
             &serde_json::json!({"kind":"arithmetic","count":10}),
-            vec![
-                (b"first page".to_vec(), "image/jpeg".into()),
-                (b"second page".to_vec(), "image/png".into()),
-            ],
+            vec![(first, "image/png".into()), (second, "image/png".into())],
         )
         .unwrap();
         worker.join().unwrap();

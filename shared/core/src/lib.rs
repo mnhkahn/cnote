@@ -60,6 +60,7 @@ impl Session {
                             "copy_image"
                                 | "download"
                                 | "download_audio"
+                                | "download_homework_attachment"
                                 | "share_image"
                                 | "recognize_image"
                         )

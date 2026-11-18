@@ -555,6 +555,9 @@ impl Notebook {
                     workspace::test_key(expected[self.smoke_shortcuts]);
                 }
             }
+            "trello" if v["op"] == "download_homework_attachment" => {
+                self.download_homework_attachment(v, cx)
+            }
             "trello" if v["op"] == "copy_image" => self.copy_trello_image(v, cx),
             "trello" if v["op"] == "download" || v["op"] == "download_audio" => {
                 self.download_trello_attachment(v, cx)
@@ -840,6 +843,24 @@ impl Notebook {
             });
         })
         .detach();
+    }
+    fn download_homework_attachment(&self, v: Value, cx: &mut Context<Self>) {
+        let request = v["request"].as_u64().unwrap_or(0);
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                let directory = directories::UserDirs::new().and_then(|dirs| dirs.download_dir().map(PathBuf::from)).ok_or_else(|| anyhow::anyhow!("找不到系统下载目录"))?;
+                let name = v["name"].as_str().ok_or_else(|| anyhow::anyhow!("缺少作业文件名"))?.to_owned();
+                let (bytes, mime) = Self::trello_original_media(v, "", "附件")?;
+                anyhow::ensure!(mime.starts_with("image/") || mime.starts_with("audio/"), "此附件不是图片或音频");
+                let path = crate::trello::download::save_file(&directory, &name, &bytes)?;
+                Ok::<_, anyhow::Error>(json!({"saved":true,"path":path}))
+            }).await;
+            let event = match result {
+                Ok(data) => json!({"request":request,"data":data}),
+                Err(error) => json!({"request":request,"error":error.to_string(),"code":crate::trello::error_code(&error)}),
+            };
+            let _ = this.update(cx, |this, _| this.js(&format!("window.cnoteTrello?.receive({event})")));
+        }).detach();
     }
     fn download_trello_attachment(&self, v: Value, cx: &mut Context<Self>) {
         let audio = v["op"] == "download_audio";

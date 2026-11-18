@@ -3,7 +3,7 @@ window.cnotePlatform={mobile:true};
 window.ipc={postMessage:raw=>window.cnoteHost.postMessage(raw)};
 (() => {
  const post=m=>ipc.postMessage(JSON.stringify(m));
- let state={},workspace=0,seq=0,saved=0,pendingBarrier=null;
+ let state={},workspace=0,seq=0,saved=0,pendingBarrier=null,toolStateReady=false;
  const pending=new Map();let worker=null,jobId=0;
  function flush(){if(seq>saved)post({type:'tool_save',seq,state});}
  function settle(){if(pendingBarrier&&saved>=seq){const next=pendingBarrier;pendingBarrier=null;next();}}
@@ -15,13 +15,13 @@ window.ipc={postMessage:raw=>window.cnoteHost.postMessage(raw)};
   document.getElementById('trello-tool').hidden=index!==4;document.getElementById('drive-tool').hidden=index!==5;
   document.querySelectorAll('[data-workspace]').forEach(b=>b.setAttribute('aria-selected',String(Number(b.dataset.workspace)===index)));
   document.getElementById('mobile-notes').hidden=index!==0;
-  if(index===4)window.cnoteTrello.show();if(index===5)window.cnoteDrive.show();
+  if(index===4&&toolStateReady)window.cnoteTrello.show();if(index===5)window.cnoteDrive.show();
  }
  window.cnoteTools={
   get workspace(){return workspace;},get state(){return state;},show,flush,
   setTrelloBoard(id){state.trelloBoard=id;seq++;flush();},
   barrier(next){pendingBarrier=next;flush();settle();},
-  receive(e){if(e.type==='tool_state'){state=e.state||{};}if(e.type==='tool_saved'){saved=Math.max(saved,e.seq);settle();}if(e.type==='tool_save_failed'){pendingBarrier=null;window.cnote.receive({type:'error',message:e.message});}},
+  receive(e){if(e.type==='tool_state'){state=e.state||{};toolStateReady=true;if(workspace===4)window.cnoteTrello.show();}if(e.type==='tool_saved'){saved=Math.max(saved,e.seq);settle();}if(e.type==='tool_save_failed'){pendingBarrier=null;window.cnote.receive({type:'error',message:e.message});}},
   compareNote(data){
    if(!worker){
     const source=new TextDecoder().decode(Uint8Array.from(atob(document.getElementById('tool-worker-source').textContent),c=>c.charCodeAt(0)));

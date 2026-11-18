@@ -1,7 +1,7 @@
 'use strict';
 (() => {
  const root=document.getElementById('trello-tool');
- let selected=new Date(),boards=[],lists=[],cards=[],board='',loaded=false,busy=false,serial=0,boardEpoch=0,detailEpoch=0,connected=false,apiKey='';
+ let selected=new Date(),boards=[],lists=[],cards=[],board='',loaded=false,busy=false,serial=0,boardEpoch=0,detailEpoch=0,connected=false,apiKey='',downloadingHomework=false;
  const pending=new Map(),mediaUrls=new Set(),originalImages=new Map(),originalData=new Map();
  let imageViewer=null,autoTimer=null,active=false,lastRefreshAt=0;
  let sharingImage=false,editingCell=null;
@@ -70,7 +70,8 @@
   el.append(text.slice(end));
   return el;
  }
- function shell(){root.innerHTML='<div class="trello-header"><div><div class="trello-eyebrow">TRELLO / WEEKLY PLANNER</div><h1>每一天，都有进展</h1></div><div class="trello-controls"><select id="trello-board" aria-label="选择 Trello 看板"></select><button id="trello-refresh" type="button" title="刷新 Trello（⌘R）" aria-keyshortcuts="Meta+R">刷新</button><button id="trello-settings" type="button">关联设置</button></div></div><div class="trello-nav"><div><button id="trello-prev" aria-label="上一周">‹</button><button id="trello-today">今天</button><button id="trello-next" aria-label="下一周">›</button></div><strong id="trello-range"></strong><span title="查看卡片详情时暂缓刷新">按截止日期 · 每分钟自动刷新</span></div><div id="trello-week" aria-label="周历"></div><div id="trello-message" role="status"></div><div id="trello-content"></div>';
+ function shell(){root.innerHTML='<div class="trello-header"><div><div class="trello-eyebrow">TRELLO / WEEKLY PLANNER</div><h1>每一天，都有进展</h1></div><div class="trello-controls"><select id="trello-board" aria-label="选择 Trello 看板"></select><button id="trello-refresh" type="button" title="刷新 Trello（⌘R）" aria-keyshortcuts="Meta+R">刷新</button><div class="trello-settings-actions"><button id="trello-settings" type="button">关联设置</button><button id="trello-download-homework" type="button" title="下载当前选中日期所有作业的图片和音频">下载作业</button></div></div></div><div class="trello-nav"><div><button id="trello-prev" aria-label="上一周">‹</button><button id="trello-today">今天</button><button id="trello-next" aria-label="下一周">›</button></div><strong id="trello-range"></strong><span title="查看卡片详情时暂缓刷新">按截止日期 · 每分钟自动刷新</span></div><div id="trello-week" aria-label="周历"></div><div id="trello-message" role="status"></div><div id="trello-content"></div>';
+  document.getElementById('trello-download-homework').onclick=downloadHomework;
   document.getElementById('trello-settings').onclick=()=>{boardEpoch++;busy=false;guide('',true);};
   document.getElementById('trello-prev').onclick=()=>shift(-7);document.getElementById('trello-next').onclick=()=>shift(7);document.getElementById('trello-today').onclick=()=>{selected=new Date();render();};document.getElementById('trello-refresh').onclick=refresh;document.getElementById('trello-board').onchange=e=>{lists=[];cards=[];board=e.target.value;window.cnoteTools.setTrelloBoard(board);loadBoard();};
  }
@@ -84,6 +85,7 @@
  document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else if(active&&loaded)resumeAutoRefresh();});
  function shift(days){selected.setDate(selected.getDate()+days);render();}
  function render(){
+  updateHomeworkDownload();
   const first=new Date(selected);first.setDate(first.getDate()-(first.getDay()+6)%7);const last=new Date(first);last.setDate(last.getDate()+6);
   document.getElementById('trello-range').textContent=`${first.getFullYear()}年 ${first.getMonth()+1}月${first.getDate()}日 — ${last.getMonth()+1}月${last.getDate()}日`;
   const week=document.getElementById('trello-week');week.replaceChildren();
@@ -168,6 +170,33 @@
   try{const data=await request('board',board);if(epoch!==boardEpoch)return;lists=data.lists||[];cards=data.cards||[];busy=false;render();}
   catch(error){if(epoch!==boardEpoch)return;busy=false;if(!silent)render();failure(error,loadBoard);}
   finally{if(epoch===boardEpoch)scheduleAutoRefresh();}
+ }
+ function updateHomeworkDownload(){
+  const control=document.getElementById('trello-download-homework');if(!control)return;
+  control.disabled=downloadingHomework||busy||!connected||!board;
+  control.textContent=downloadingHomework?'正在下载…':'下载作业';
+ }
+ async function downloadHomework(){
+  if(downloadingHomework||busy||!connected||!board)return;
+  const date=dayKey(selected),homework=cards.filter(card=>!card.closed&&dueDay(card)===date).map(card=>({id:card.id,name:card.name}));
+  if(!homework.length){message(`${date} 没有作业`);return;}
+  downloadingHomework=true;updateHomeworkDownload();
+  let saved=0;const failed=[];
+  try{
+   const files=[];
+   for(const card of homework){
+    message(`正在读取 ${date} 的提交附件：${card.name}`);
+    try{const result=await request('homework_attachments',card.id,{name:card.name,date});for(const file of result.files||[])files.push({...file,card:card.id});}
+    catch(error){failed.push(`${card.name}：${error.message}`);}
+   }
+   for(const [index,file] of files.entries()){
+    message(`正在下载 ${index+1}/${files.length}：${file.name}`);
+    try{await request('download_homework_attachment',file.card,{attachment:file.id,name:file.name});saved++;}
+    catch(error){if(error.code==='download_permission_denied')throw error;failed.push(`${file.name}：${error.message}`);}
+   }
+   message((saved?`${date} 已下载 ${saved} 个附件到下载目录`:failed.length?`${date} 未下载成功`:`${date} 没有可下载的图片或音频`)+(failed.length?`；${failed.length} 项失败：${failed.slice(0,3).join('；')}`:''),!!failed.length);
+  }catch(error){message(`下载已停止，已保存 ${saved} 个附件：${error.message}`,true);}
+  finally{downloadingHomework=false;updateHomeworkDownload();}
  }
  function removeDetail(){
   closeImageViewer();originalImages.clear();originalData.clear();

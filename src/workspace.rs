@@ -27,7 +27,7 @@ impl Workspace {
             Self::Text => "文本",
             Self::Diff => "Diff",
             Self::Csv => "CSV",
-            Self::Trello => "Trello",
+            Self::Trello => "作业",
             Self::OneDrive => "OneDrive",
         }
     }
