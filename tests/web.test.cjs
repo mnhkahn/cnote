@@ -13,11 +13,11 @@ before(async()=>{
  });await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin=`http://127.0.0.1:${server.address().port}/notes/`;
 });
 after(()=>new Promise(resolve=>server.close(resolve)));
-test('artifact contains real WASM and only the note page',()=>{
+test('artifact contains real WASM, homework and OneDrive, without desktop tools',()=>{
  const bytes=fs.readFileSync(path.join(dist,'pkg/cnote_web_bg.wasm'));assert.deepEqual([...bytes.subarray(0,4)],[0,97,115,109]);
  const html=fs.readFileSync(path.join(dist,'index.html'),'utf8');
- for(const banned of ['TOOL_HTML','TOOL_SCRIPT','TRELLO_SCRIPT','tool-ace-source','tool-worker-source','trello-tool','csv-tool','diff-tool','text-tool','Ace Editor'])assert(!html.includes(banned),banned);
- assert(!fs.readFileSync(path.join(dist,'adapter.js'),'utf8').includes('api.trello.com'));
+ for(const banned of ['TOOL_HTML','TOOL_SCRIPT','TRELLO_SCRIPT','tool-ace-source','tool-worker-source','csv-tool','diff-tool','text-tool','Ace Editor'])assert(!html.includes(banned),banned);
+ assert(html.includes('id="trello-tool"'));assert(html.includes('id="drive-tool"'));assert(html.includes('id="web-workspace"'));
  const sums=fs.readFileSync(path.join(dist,'SHA256SUMS'),'utf8');assert(sums.includes('pkg/cnote_web_bg.wasm'));assert(sums.includes('config.json'));
 });
 for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(`${name}: real WASM notes, persistence, clipboard and tab isolation`,async()=>{
@@ -73,16 +73,17 @@ for(const [name,type]of [['Chromium',chromium],['WebKit',webkit]])test(`${name}:
    if(method==='PUT'){
     const old=files.get(pathname.split('/items/')[1]?.split('/')[0]);
     if(old&&req.headers()['if-match']!==old.eTag)return json(412,{});
-    const id=old?.id||'remote-'+(++number),item={id,name:old?.name||'Web--12345678.html',eTag:'v'+(++number),file:{},html:req.postData()};files.set(id,item);const {html,...meta}=item;return json(200,meta);
+    const id=old?.id||'remote-'+(++number),item={id,name:old?.name||'Web--12345678.html',eTag:'v'+(++number),file:{},html:req.postData()};files.set(id,item);const {html,...meta}=item;return json(200,{...meta,'@microsoft.graph.downloadUrl':'https://cnote-test-content.example/'+id});
    }
    const id=pathname.split('/items/')[1]?.split('/')[0],item=files.get(id);
    if(item&&method==='GET'){
     if(pathname.endsWith('/content'))return route.fulfill({status:200,headers:{'Content-Type':'text/html','Access-Control-Allow-Origin':'*'},body:item.html});
-    const {html,...meta}=item;return json(200,meta);
+    const {html,...meta}=item;return json(200,{...meta,'@microsoft.graph.downloadUrl':'https://cnote-test-content.example/'+id});
    }
    if(item&&method==='DELETE'){if(req.headers()['if-match']!==item.eTag)return json(412,{});files.delete(id);return route.fulfill({status:204,headers:{'Access-Control-Allow-Origin':'*'}});}
    return json(404,{});
   });
+  await page.route('https://cnote-test-content.example/**',route=>{assert.equal(route.request().headers().authorization,undefined);const id=new URL(route.request().url()).pathname.slice(1);return route.fulfill({status:200,headers:{'Content-Type':'text/html','Access-Control-Allow-Origin':'*'},body:files.get(id).html});});
   await page.goto(origin);await page.waitForFunction(()=>document.body.dataset.ready==='true');
   await page.getByRole('button',{name:'登录 OneDrive',exact:true}).click();await page.getByRole('button',{name:'退出 OneDrive',exact:true}).waitFor();
   await page.getByRole('button',{name:'新建笔记',exact:true}).first().click();await page.getByPlaceholder('给笔记起个名字').fill('Cloud note');await page.getByRole('button',{name:'创建',exact:true}).click();

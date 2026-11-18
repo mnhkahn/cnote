@@ -44,7 +44,7 @@
  async function refresh(){
   if(!authenticated){render();status('请先登录 OneDrive');return;}
   const current=++version;status('正在读取文件…');
-  try{const query=$('search').value.trim();const data=await request(query?'search':'list',{parent:crumbs.at(-1).id,query});if(current!==version)return;folder=data.folder;items=data.items;selected.clear();anchor=-1;loaded=true;render();status(query?`搜索结果 ${items.length} 项`:`${items.length} 项 · 双击文件夹进入，双击文件打开本地副本 · ⌘C 下载并复制到 Finder`);}catch(error){if(current===version)status(error.message,true);}
+  try{const query=$('search').value.trim();const data=await request(query?'search':'list',{parent:crumbs.at(-1).id,query});if(current!==version)return;folder=data.folder;items=data.items;selected.clear();anchor=-1;loaded=true;render();status(query?`搜索结果 ${items.length} 项`:window.cnotePlatform?.web?`${items.length} 项`:`${items.length} 项 · 双击文件夹进入，双击文件打开本地副本 · ⌘C 下载并复制到 Finder`);}catch(error){if(current===version)status(error.message,true);}
  }
  function navigate(next){crumbs=next;$('search').value='';selected.clear();items=[];folder=null;render();refresh();}
  function enter(item){navigate([...crumbs,{id:item.id,name:item.name}]);}
@@ -56,7 +56,7 @@
  }
  async function work(action){if(busy)return;busy=true;render();try{await action();}catch(error){status(error.message,true);}finally{busy=false;render();}}
  async function mutation(op,data){await request(op,data);await refresh();}
- async function download(open=false){const ids=picked().map(x=>x.id);if(!ids.length)return;await work(async()=>{status(window.cnotePlatform?.mobile?'正在下载文件…':'正在下载，完成后会复制到系统剪贴板…');const data=await request('download',{ids,copy:!open,open});status(window.cnotePlatform?.mobile?'已下载到应用，可通过系统分享保存或打开。':open?`已打开本地副本。修改后请重新上传。保存于 ${data.directory}`:`已下载 ${ids.length} 项并复制，可在 Finder 中 ⌘V 粘贴。保存于 ${data.directory}`);});}
+ async function download(open=false){const ids=picked().map(x=>x.id);if(!ids.length)return;await work(async()=>{status(window.cnotePlatform?.mobile?'正在下载文件…':'正在下载，完成后会复制到系统剪贴板…');const data=await request('download',{ids,copy:!open,open});status(window.cnotePlatform?.web?'文件已准备好，请通过浏览器保存。':window.cnotePlatform?.mobile?'已下载到应用，可通过系统分享保存或打开。':open?`已打开本地副本。修改后请重新上传。保存于 ${data.directory}`:`已下载 ${ids.length} 项并复制，可在 Finder 中 ⌘V 粘贴。保存于 ${data.directory}`);});}
  async function rename(){const item=picked()[0];if(!item)return;const answer=await ask('重命名',{value:item.name});if(answer)await work(()=>mutation('rename',{id:item.id,etag:item.eTag,name:answer.value}));}
  async function remove(){const targets=picked();if(!targets.length)return;const answer=await ask(`删除 ${targets.length} 项？`,{input:false,description:targets.map(x=>x.name).join('、')+'。文件夹内的内容也会删除，可从 OneDrive 回收站恢复。',ok:'删除'});if(answer)await work(async()=>{try{for(const item of targets)await request('delete',{id:item.id,etag:item.eTag});}finally{await refresh();}});}
  async function edit(){const item=picked()[0];if(!item||item.folder)return;await work(async()=>{status('正在读取文本…');const data=await request('read',{id:item.id});const answer=await ask(item.name,{input:false,text:data.text,description:'UTF-8 文本 · 保存会更新 OneDrive 原文件',ok:'保存到 OneDrive'});if(answer&&answer.text!==data.text)await mutation('save',{id:item.id,etag:data.item.eTag,text:answer.text});else status('查看完成');});}

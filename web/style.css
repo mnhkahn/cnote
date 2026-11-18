@@ -44,3 +44,29 @@ body{padding-left:250px}#web-sidebar{position:fixed;left:0;top:0;bottom:0;width:
  dialog button{min-height:44px}
 }
 @media print{body{height:auto}#mobile-note-list,#mobile-brand,#mobile-more,#sidebar-shade,#close-sidebar{display:none!important}}
+
+/* Shared workspaces use the same retained note editor and browser account. */
+#web-navigation{display:flex;align-items:center;gap:12px;flex:none;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--line);background:var(--bg)}
+#web-workspace{font:600 17px -apple-system,BlinkMacSystemFont,sans-serif;color:var(--ink);background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:8px 12px;max-width:160px}
+#web-notice{flex:1;min-width:0;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+#web-download{display:flex;align-items:center;gap:12px;flex:none;padding:8px 16px;background:var(--active);color:var(--accent)}#web-download[hidden]{display:none}#web-download a{color:inherit;overflow-wrap:anywhere}#web-download button{margin-left:auto}
+#local-tools{flex:1;min-height:0;overflow:auto;padding:12px;position:relative}#local-tools[hidden],.tool-page[hidden]{display:none!important}
+body.web-tools{padding-left:0}body.web-tools #web-sidebar,body.web-tools>header,body.web-tools>main,body.web-tools>footer,body.web-tools #toggle-sidebar{display:none!important}
+#drive-finder,#drive-eject,#drive-tool .drive-heading{display:none!important}#drive-crumbs:not(:has(button+button)){display:none}
+@media (max-width:700px), (max-width:1000px) and (hover:none) and (pointer:coarse){
+ #web-navigation{padding:calc(6px + env(safe-area-inset-top)) 10px 6px;gap:8px}#web-workspace{font-size:16px;max-width:132px}#web-notice{font-size:11px}#mobile-brand{display:none}
+ #local-tools{padding:0}
+ #trello-tool .trello-header{flex-direction:column;align-items:stretch;padding:12px;gap:8px}
+ #trello-tool .trello-controls{flex-wrap:wrap}
+ #trello-board{flex:1;min-width:0}
+ #trello-tool .trello-nav{flex-wrap:wrap;padding:4px 12px 8px}
+ #trello-tool .trello-nav>span{display:none}
+ #trello-week{grid-template-columns:repeat(7,minmax(0,1fr));padding:0 8px 10px}
+ #trello-week .trello-day{min-width:0;padding-inline:2px}
+ #trello-content{padding:0 12px 16px;overflow:auto}
+ #trello-content .trello-table{min-width:610px}
+ #trello-message{padding:0 12px 10px}
+ #trello-tool button{min-height:40px}
+ #drive-tool{padding:12px;min-width:0}.drive-toolbar{flex-wrap:wrap;gap:6px}.drive-toolbar button{min-height:40px}#drive-search-form{width:100%;max-width:100%;min-width:0}#drive-search{min-width:0;flex:1}.drive-columns,#drive-sort,#drive-order{display:none!important}.drive-row{min-width:0;grid-template-columns:minmax(0,1fr) auto;gap:5px 12px;min-height:58px}.drive-row span:first-child{grid-column:1/-1;font-size:15px}.drive-row span:nth-child(3){display:none}#drive-dialog{width:96vw;max-width:96vw}
+}
+@media print{#web-navigation,#web-download,#local-tools{display:none!important}}

@@ -606,7 +606,7 @@
     document.getElementById('status').textContent=`${n?.title||'笔记'}：保存失败，草稿保留在内存中，将自动重试。${e.message}`;
     document.getElementById('status').style.color='#ca5262';break;
    }
-   case 'state':if(e.cache_generation!==undefined)resetCache(e.cache_generation,e.cache_account);if(e.intent===undefined||e.intent>=intent){document.getElementById('status').textContent=e.status;document.getElementById('status').style.color='';}break;
+   case 'state':window.cnoteTrello?.account(e.authenticated,e.cache_account,e.account);if(e.cache_generation!==undefined)resetCache(e.cache_generation,e.cache_account);if(e.intent===undefined||e.intent>=intent){document.getElementById('status').textContent=e.status;document.getElementById('status').style.color='';}break;
    case 'error':document.getElementById('status').textContent=e.message;document.getElementById('status').style.color='#ca5262';break;
    case 'dialog':{
     const d=e.data;

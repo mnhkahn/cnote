@@ -13,11 +13,15 @@ use std::{io::Read, sync::Mutex, time::Duration};
 static AUTH: Mutex<Session> = Mutex::new(Session {
     loaded: false,
     auth: None,
+    account: String::new(),
+    account_name: String::new(),
 });
 #[derive(Default)]
 struct Session {
     loaded: bool,
     auth: Option<Credentials>,
+    account: String,
+    account_name: String,
 }
 impl Session {
     fn restore_with(
@@ -31,7 +35,20 @@ impl Session {
         Ok(self.auth.clone())
     }
     fn auth(&mut self) -> Result<Option<Credentials>> {
-        self.restore_with(stored)
+        let account = self.account.clone();
+        self.restore_with(|| stored_for(&account))
+    }
+}
+
+/// The engine supplies the verified Microsoft identity, never an IPC argument.
+pub fn account_changed(account: &str, name: &str) {
+    if let Ok(mut session) = AUTH.lock() {
+        if session.account != account {
+            session.account = account.into();
+            session.loaded = false;
+            session.auth = None;
+        }
+        session.account_name = name.into();
     }
 }
 #[derive(Debug)]
@@ -50,10 +67,39 @@ pub fn error_code(error: &anyhow::Error) -> &'static str {
     }
 }
 const API: &str = "https://api.trello.com/1";
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct Credentials {
     key: String,
     token: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct AccountLink {
+    credentials: Credentials,
+    member_id: String,
+    member_name: String,
+    board_id: String,
+    board_name: String,
+}
+type AccountLinks = std::collections::BTreeMap<String, AccountLink>;
+fn links() -> Result<AccountLinks> {
+    crate::credential_store::get("trello-links")?
+        .map(|value| serde_json::from_str(&value).context("作业账号关联记录损坏，未覆盖原记录"))
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+fn select_credentials(
+    account: &str,
+    links: &AccountLinks,
+    legacy: Option<Credentials>,
+) -> Option<Credentials> {
+    if let Some(link) = links.get(account).filter(|_| !account.is_empty()) {
+        return Some(link.credentials.clone());
+    }
+    // A legacy entry already assigned to another Microsoft account is not a candidate.
+    legacy.filter(|credentials| !links.values().any(|link| &link.credentials == credentials))
+}
+fn stored_for(account: &str) -> Result<Option<Credentials>> {
+    Ok(select_credentials(account, &links()?, stored()?))
 }
 fn stored() -> Result<Option<Credentials>> {
     crate::credential_store::get("trello-auth")?
@@ -407,12 +453,73 @@ pub fn request(v: Value) -> Result<Value> {
     let mut session = AUTH
         .lock()
         .map_err(|_| anyhow::anyhow!("Trello 连接状态异常，请重启应用"))?;
+    if let Some(account) = v.get("account_id") {
+        anyhow::ensure!(
+            account.as_str() == Some(session.account.as_str()),
+            "微软账号已切换，请重试"
+        );
+    }
     match v["op"].as_str().unwrap_or_default() {
         "status" => {
             let auth = session.auth()?;
+            let linked = links()?.get(&session.account).cloned();
             return Ok(
-                json!({"connected":auth.is_some(),"key":auth.as_ref().map(|a| a.key.as_str()).unwrap_or(configured_key())}),
+                json!({"connected":auth.is_some(),"key":auth.as_ref().map(|a| a.key.as_str()).unwrap_or(configured_key()),
+                    "account_linking":true,"account_id":session.account,"linked":linked.is_some(),"board":linked.as_ref().map(|l|l.board_id.as_str())}),
             );
+        }
+        "link_status" | "link_account" => {
+            anyhow::ensure!(!session.account.is_empty(), "请先登录微软账号");
+            if v["account_id"].as_str() != Some(session.account.as_str()) {
+                bail!("微软账号已切换，请重新确认关联");
+            }
+            let records = links()?;
+            if v["op"] == "link_status" && records.contains_key(&session.account) {
+                return Ok(json!({"linked":true}));
+            }
+            let auth = session.auth()?.ok_or(AuthRequired)?;
+            let account = session.account.clone();
+            let account_name = session.account_name.clone();
+            drop(session);
+            let api = Api::new(auth.clone())?;
+            let member = api.get("/members/me", &[("fields", "id,fullName,username")])?;
+            if v["op"] == "link_status" {
+                let boards = api.get(
+                    "/members/me/boards",
+                    &[("filter", "open"), ("fields", "name,closed")],
+                )?;
+                return Ok(
+                    json!({"linked":false,"account_id":account,"account_name":account_name,"member":member,"boards":boards}),
+                );
+            }
+            let board_id = identifier(&v)?.to_owned();
+            anyhow::ensure!(
+                v["member_id"] == member["id"],
+                "Trello 账号已变化，请重新确认关联"
+            );
+            let board = api.get(&format!("/boards/{board_id}"), &[("fields", "name,closed")])?;
+            anyhow::ensure!(board["closed"] == false, "请选择未归档的作业看板");
+            let record = AccountLink {
+                credentials: auth.clone(),
+                member_id: member["id"]
+                    .as_str()
+                    .context("无法确认 Trello 账号")?
+                    .into(),
+                member_name: member["fullName"].as_str().unwrap_or_default().into(),
+                board_id: board_id.clone(),
+                board_name: board["name"].as_str().unwrap_or_default().into(),
+            };
+            let mut session = AUTH
+                .lock()
+                .map_err(|_| anyhow::anyhow!("作业连接状态异常"))?;
+            anyhow::ensure!(
+                session.account == account && session.auth()? == Some(auth),
+                "账号已切换，请重新确认关联"
+            );
+            let mut records = links()?;
+            records.insert(account, record);
+            crate::credential_store::set("trello-links", &serde_json::to_string(&records)?)?;
+            return Ok(json!({"linked":true,"board":board_id}));
         }
         "authorize" => {
             return Ok(json!({"url":authorize(v["key"].as_str().unwrap_or_default().trim())?}));
@@ -420,17 +527,59 @@ pub fn request(v: Value) -> Result<Value> {
         "connect" => {
             let auth = credentials(&v)?;
             let api = Api::new(auth)?;
-            let member = api.get("/members/me", &[("fields", "fullName,username")])?;
+            let member = api.get("/members/me", &[("fields", "id,fullName,username")])?;
             crate::credential_store::set("trello-auth", &serde_json::to_string(&api.auth)?)?;
+            let mut records = links()?;
+            if !session.account.is_empty() && records.remove(&session.account).is_some() {
+                crate::credential_store::set("trello-links", &serde_json::to_string(&records)?)?;
+            }
             session.loaded = true;
             session.auth = Some(api.auth.clone());
             return Ok(json!({"connected":true,"name":member["fullName"]}));
         }
         "disconnect" => {
+            let mut records = links()?;
+            if records.remove(&session.account).is_some() {
+                crate::credential_store::set("trello-links", &serde_json::to_string(&records)?)?;
+            }
             crate::credential_store::remove("trello-auth")?;
             session.loaded = true;
             session.auth = None;
             return Ok(json!({"connected":false}));
+        }
+        "link_board" => {
+            anyhow::ensure!(
+                v["account_id"].as_str() == Some(session.account.as_str())
+                    && !session.account.is_empty(),
+                "微软账号已切换，请重新选择看板"
+            );
+            let account = session.account.clone();
+            let credentials = links()?
+                .get(&account)
+                .context("请先关联当前微软账号")?
+                .credentials
+                .clone();
+            drop(session);
+            let board_id = identifier(&v)?.to_owned();
+            let board = Api::new(credentials.clone())?
+                .get(&format!("/boards/{board_id}"), &[("fields", "name,closed")])?;
+            anyhow::ensure!(board["closed"] == false, "请选择未归档的作业看板");
+            let session = AUTH
+                .lock()
+                .map_err(|_| anyhow::anyhow!("作业连接状态异常"))?;
+            anyhow::ensure!(session.account == account, "微软账号已切换，请重新选择看板");
+            let mut records = links()?;
+            let record = records
+                .get_mut(&account)
+                .context("请重新关联当前微软账号")?;
+            anyhow::ensure!(
+                record.credentials == credentials,
+                "Trello 账号已切换，请重新选择看板"
+            );
+            record.board_id = board_id;
+            record.board_name = board["name"].as_str().unwrap_or_default().into();
+            crate::credential_store::set("trello-links", &serde_json::to_string(&records)?)?;
+            return Ok(json!({"saved":true}));
         }
         "boards"
         | "board"
@@ -557,6 +706,49 @@ pub fn request(v: Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn microsoft_links_restore_their_own_credentials_and_hide_assigned_legacy_tokens() {
+        let legacy = Credentials {
+            key: "legacy-key".into(),
+            token: "legacy-token".into(),
+        };
+        assert!(
+            select_credentials("microsoft-a", &AccountLinks::new(), Some(legacy.clone()))
+                == Some(legacy.clone())
+        );
+        let record = AccountLink {
+            credentials: legacy.clone(),
+            member_id: "trello-a".into(),
+            member_name: "家长".into(),
+            board_id: "board-a".into(),
+            board_name: "嘉嘉".into(),
+        };
+        let mut records = AccountLinks::from([("microsoft-a".into(), record.clone())]);
+        assert!(select_credentials("microsoft-a", &records, None) == Some(legacy.clone()));
+        assert!(select_credentials("microsoft-b", &records, Some(legacy.clone())).is_none());
+        assert!(select_credentials("", &records, Some(legacy.clone())).is_none());
+        let second = Credentials {
+            key: "second-key".into(),
+            token: "second-token".into(),
+        };
+        assert!(
+            select_credentials("microsoft-b", &records, Some(second.clone()))
+                == Some(second.clone())
+        );
+        records.insert(
+            "microsoft-b".into(),
+            AccountLink {
+                credentials: second.clone(),
+                ..record
+            },
+        );
+        let restarted: AccountLinks =
+            serde_json::from_str(&serde_json::to_string(&records).unwrap()).unwrap();
+        assert!(
+            select_credentials("microsoft-a", &restarted, Some(second.clone())) == Some(legacy)
+        );
+        assert!(select_credentials("microsoft-b", &restarted, None) == Some(second));
+    }
     #[test]
     #[ignore = "requires explicit live Trello test credentials"]
     fn live_read_only_api() {

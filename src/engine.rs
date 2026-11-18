@@ -146,6 +146,14 @@ impl Engine {
         self.emit(Event::Theme { theme });
     }
     fn state(&self) -> Result<()> {
+        crate::trello::account_changed(
+            if self.authenticated {
+                &self.account
+            } else {
+                ""
+            },
+            &self.name,
+        );
         self.emit(Event::State {
             finder_enabled: self.db.setting("finder_enabled")?.as_deref() == Some("true"),
             cache_generation: self.generation.load(Ordering::SeqCst),

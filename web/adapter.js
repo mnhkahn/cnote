@@ -1,9 +1,11 @@
 import init, { Notebook } from './pkg/cnote_web.js';
 import { PublicClientApplication } from '@azure/msal-browser';
 import { diffArrays } from 'diff';
+import { createFeatures } from './features.mjs';
+import {readBytes} from './downloads.mjs';
 
-let config;
-const status = message => { document.getElementById('status').textContent = message; };
+let config,features;
+const status = message => { document.getElementById('status').textContent = message;const notice=document.getElementById('web-notice');if(notice)notice.textContent=message; };
 const emit = event => window.cnote.receive(event);
 const editing = new Set();
 let notebook, db, auth, authAccount, dirty = false, syncing = false, syncTimer, released;
@@ -40,6 +42,7 @@ function render() {
  }
  document.getElementById('login').textContent = authAccount?'退出 OneDrive':'登录 OneDrive';
  document.getElementById('account').textContent = authAccount?.name || (state.account?'已离线保留上次账号的笔记':'本机笔记');
+ features?.account(authAccount);
 }
 async function open(id,intent) {
  const result = await mutate({type:'open',id});emit({...result,intent});
@@ -49,6 +52,7 @@ async function open(id,intent) {
 function laterSync() { clearTimeout(syncTimer);syncTimer=setTimeout(()=>sync().catch(()=>status('OneDrive 同步失败，本地草稿已保留')),2000); }
 async function handle(m) {
  switch(m.type) {
+  case 'trello':case 'drive':void features.dispatch(m);break;
   case 'dirty':dirty=true;break;
   case 'clean':dirty=false;break;
   case 'editing':editing.add(m.id);break;
@@ -138,8 +142,8 @@ async function graph(path,options={}) {
 async function checked(response) { if(!response.ok)throw Error(`OneDrive 请求失败 (${response.status})`);return response; }
 async function download(id) {
  const path='/me/drive/items/'+encodeURIComponent(id);
- const before=await (await checked(await graph(path+'?$select=id,name,eTag'))).json();
- const html=await (await checked(await graph(path+'/content'))).text();
+ const {meta:before,response}=await features.content(id);
+ const html=new TextDecoder('utf-8',{fatal:true}).decode(await readBytes(response,20*1024*1024));
  const after=await (await checked(await graph(path+'?$select=id,name,eTag'))).json();
  if(before.eTag!==after.eTag)throw Error('云端版本变化，请重试');
  if(html.length>20*1024*1024)throw Error('笔记超过 20 MB');
@@ -164,7 +168,7 @@ async function sync() {
     if(snapshot().account!==account||editing.has(local?.id))return;
     if(local){
      await mutate({type:'remote',id:local.id,...data});
-     if(note(local.id).conflict){if(view().selected===local.id)emit({type:'dialog',kind:'conflict',data:{id:local.id}});}
+     if(note(local.id).conflict){if(window.cnoteTools.workspace===0&&view().selected===local.id)emit({type:'dialog',kind:'conflict',data:{id:local.id}});}
      else if(view().selected===local.id)emit(JSON.parse(notebook.execute(JSON.stringify({type:'open',id:local.id}))));
     }else await mutate({type:'import',id:crypto.randomUUID(),remote_id:item.id,title:item.name.replace(/--[a-f0-9]{8}\.html$/i,'').replace(/\.html$/i,''),...data});
    });
@@ -231,7 +235,7 @@ function updateSidebar(){
  sidebar.setAttribute('aria-hidden',String(sidebar.inert));
  if(opened){sidebar.setAttribute('role','dialog');sidebar.setAttribute('aria-modal','true');}else{sidebar.removeAttribute('role');sidebar.removeAttribute('aria-modal');}
  drawerToggle.setAttribute('aria-expanded',String(opened));drawerShade.hidden=!opened;
- for(const element of document.querySelectorAll('body>header,body>main,body>footer'))element.inert=opened;
+ for(const element of document.querySelectorAll('body>header,body>main,body>footer,#local-tools,#web-navigation'))element.inert=opened;
 }
 function setDrawer(opened){
  const wasOpen=document.body.classList.contains('mobile-sidebar-open');
@@ -269,6 +273,9 @@ document.getElementById('new-note').onclick=()=>{if(mobileLayout.matches)setDraw
 document.getElementById('refresh').onclick=()=>window.cnote.action('save');
 document.getElementById('toggle-sidebar').onclick=toggleSidebar;
 document.getElementById('login').onclick=()=>{if(mobileLayout.matches)setDrawer(false);window.cnote.action(authAccount?'logout':'login');};
+document.getElementById('web-workspace').onchange=async event=>{const index=Number(event.target.value);window.cnote.flushAll();try{await enqueue(()=>features.show(index));}catch(error){event.target.value=String(window.cnoteTools.workspace);status(error.message);}};
+document.getElementById('web-account-login').onclick=()=>window.cnote.action('login');
+document.getElementById('web-download-close').onclick=()=>{document.getElementById('web-download').hidden=true;};
 document.getElementById('theme').onchange=event=>{window.cnoteTheme.set(event.target.value);localStorage.setItem('cnote-web-theme',event.target.value);};
 try {
  config=await fetch('./config.json').then(r=>{if(!r.ok)throw Error('无法读取配置');return r.json();});
@@ -286,10 +293,14 @@ try {
  notebook=new Notebook((await transact('readonly',store=>store.get('notebook')))||'');
  auth=new PublicClientApplication({auth:{clientId:config.clientId,authority:'https://login.microsoftonline.com/consumers',redirectUri:new URL(config.redirectUri||'./auth.html',location.href).href},cache:{cacheLocation:'sessionStorage'}});
  await auth.initialize();
+ const compareNote=window.cnoteTools.compareNote;
+ const store={get:key=>transact('readonly',s=>s.get(key)),set:(key,value)=>transact('readwrite',s=>s.put(value,key))};
+ features=await createFeatures({store,graph,fetch,compareNote,getAccount:()=>authAccount,onShow(){setDrawer(false);features?.account(authAccount);}});
  authAccount=auth.getAllAccounts().find(a=>a.homeAccountId===snapshot().account)||null;if(authAccount)auth.setActiveAccount(authAccount);
  const preference=localStorage.getItem('cnote-web-theme')||'system';window.cnoteTheme.set(preference);document.getElementById('theme').value=preference;
  window.ipc.postMessage=message=>{const m=JSON.parse(message);enqueue(()=>handle(m)).catch(()=>status('操作未完成，本地草稿保留；请重试或导出笔记'));};
  render();for(const message of window.cnoteWebQueue.splice(0))window.ipc.postMessage(message);
+ features.show(features.initialWorkspace);
  document.body.dataset.ready='true';if(authAccount)laterSync();
 } catch(error) {
  status(error.message||'笔记启动失败');for(const editor of document.querySelectorAll('[contenteditable]'))editor.contentEditable='false';

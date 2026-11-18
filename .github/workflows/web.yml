@@ -1,4 +1,4 @@
-name: Export notes WebAssembly
+name: Export CNote WebAssembly
 on:
   push:
   pull_request:
@@ -32,12 +32,13 @@ jobs:
       - run: cargo fmt --manifest-path web/core/Cargo.toml -- --check
       - run: cargo clippy --manifest-path web/core/Cargo.toml --locked --all-targets -- -D warnings
       - run: cargo test --manifest-path web/core/Cargo.toml --locked
-      - name: Build notes only
+      - name: Build Web workspaces
         run: npm run build:web
         env:
           CNOTE_WEB_VERSION: ${{ github.ref_name }}
           CNOTE_WEB_CLIENT_ID: ${{ vars.CNOTE_WEB_CLIENT_ID }}
-      - name: Archive notes artifact
+      - run: node --test tests/web-features.test.cjs
+      - name: Archive Web artifact
         run: |
           tar -czf dist/cnote-web.tar.gz -C dist/cnote-web .
           (cd dist && sha256sum cnote-web.tar.gz > cnote-web.tar.gz.sha256)

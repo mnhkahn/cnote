@@ -154,7 +154,7 @@ fn with_store<T>(
     operation: impl FnOnce(&mut Store<Keychain>) -> Result<T>,
 ) -> Result<T> {
     anyhow::ensure!(
-        matches!(account, "onedrive-oauth" | "trello-auth"),
+        matches!(account, "onedrive-oauth" | "trello-auth" | "trello-links"),
         "未知的 CNote 凭据类型"
     );
     let mut store = STORE

@@ -1,6 +1,6 @@
-# CNote 笔记 Web / WASM
+# CNote Web / WASM
 
-只导出笔记工作区，不包含文本工具、Diff 工具页、CSV、Trello、Ace、桌面更新器或 macOS 凭据。
+提供 CNote 笔记、作业和 OneDrive。浏览器复用文件管理页面，通过 Microsoft Graph 操作文件。
 富文本编辑器、样式、配色、表格粘贴和标题提取复用仓库源码；浏览器笔记状态、修订确认和冲突校验由 `web/core` 编译为真正的 WASM，浏览器存储/登录/网络由 JS 适配。
 这不是把 GPUI 应用整体编译到浏览器，也尚未将桌面 `engine.rs` 改造成两端共用的同步引擎。桌面实现不变。
 
@@ -13,10 +13,10 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.130 --locked
 npm ci
 npm run build:web
-npm run test:web
+npm run test:web-features
 ```
 
-输出 `dist/cnote-web/`，包含 `index.html`、编辑器资源、适配脚本、`pkg/*.wasm`、Microsoft 登录回调页、配置、版本与校验文件。GitHub Actions 的 **Export notes WebAssembly** 工作流自动构建和测试并上传压缩包；支持分支、PR、tag 与手动触发，不部署网站、不修改其他仓库，不需要发布/部署密钥。
+输出 `dist/cnote-web/`，包含 `index.html`、编辑器资源、适配脚本、`pkg/*.wasm`、Microsoft 登录回调页、配置、版本与校验文件。GitHub Actions 的 **Export CNote WebAssembly** 工作流自动构建和测试并上传压缩包；支持分支、PR、tag 与手动触发，不部署网站、不修改其他仓库，不需要发布/部署密钥。
 
 ## 托管与登录
 
@@ -27,6 +27,13 @@ npm run test:web
 MSAL v5 使用独立回调桥接页，参考 https://learn.microsoft.com/en-us/entra/msal/javascript/browser/redirect-bridge 。不要把笔记主页面代码放入回调页。
 
 登录凭据由 MSAL 放入 sessionStorage，与 IndexedDB 的笔记正文分开。退出登录保留原账号的本地笔记；离线创建且未归属的笔记在下一次登录时归入该账号。每个浏览器 origin 使用一个 IndexedDB 数据库；Web Locks 限制同一 origin 同时只能有一个可编辑标签页，防止全量快照相互覆盖。浏览器隐私模式、存储配额和清理网站数据均会影响本地持久性，请使用 HTML 导出保留副本。
+
+## OneDrive
+
+顶部选择器在 CNote 和 OneDrive 之间切换，保留笔记编辑状态。
+OneDrive 与笔记共用微软登录，支持目录、搜索、上传、新建文件夹/文本、重命名、移动、删除、文本编辑和下载。浏览器读取 `@microsoft.graph.downloadUrl` 后不带 OAuth 头下载内容，保留 ETag 防覆盖。Web 不挂载云盘，也不提供本机 OCR。
+
+多文件或文件夹下载打包为 ZIP，单次最多 200 MB。页面保留可手动点击的“保存”链接，兼容需要新点击手势的浏览器。单文件按浏览器下载设置保存，不会声称自动创建系统 `下载/CNote` 目录。
 
 ## 浏览器适配边界
 
@@ -49,3 +56,7 @@ MSAL v5 使用独立回调桥接页，参考 https://learn.microsoft.com/en-us/e
 宽度不超过700px，或无悬停指针的触屏设备宽度不超过1000px时，正文占满屏幕，笔记列表默认收起为遮罩抽屉；点“笔记”打开，选择当前或其他笔记、新建笔记、点遮罩或按Esc均可收起。编辑工具栏单行横向滑动，打印和HTML导出位于“更多”。触摸按钮扩大，并按可视视口高度及安全区域调整布局。桌面继续使用原有250px侧栏和工具栏。图片操作条遵循隐藏状态，仅在选中图片时显示；修复仅作用于Web导出样式。
 
 `npm run test:web` 包含Chromium和WebKit的320/390/700px手机布局、844px触屏横屏、抽屉、保存恢复、导出/打印、图片选中及1280px桌面切换回归。键盘空间使用缩小视口验证；该检查不替代iPhone/Android真机与系统软键盘验证。
+
+## 作业
+
+使用 Trello API Key 和只读 Token 关联看板。浏览器直接访问 Trello REST API，在当前标签页保留授权，并记住最近选择的看板。可按日期查看卡片和进度，图片和音频通过卡片里的「在 Trello 打开」查看。

@@ -127,7 +127,7 @@ jobs:
         with:
           name: cnote-notes-web-${{ github.sha }}
           path: web-release
-      - name: Verify and include notes Web package
+      - name: Verify and include CNote Web package
         shell: bash
         run: |
           (cd web-release && sha256sum -c cnote-web.tar.gz.sha256)
