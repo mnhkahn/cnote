@@ -3,14 +3,25 @@ const fields='id,name,size,folder,file,eTag,lastModifiedDateTime,parentReference
 const item=id=>'/me/drive/items/'+encodeURIComponent(id);
 const parent=m=>m.parent?item(m.parent):'/me/drive/root';
 function filename(value){if(typeof value!=='string'||!value.trim()||/[\\/:*?"<>|\x00-\x1f]/.test(value)||value==='.'||value==='..'||/[. ]$/.test(value)||new TextEncoder().encode(value).length>255)throw Error('文件名无效');return value;}
+export class OneDriveContentError extends Error {}
+
 export function createDrive({graph,fetch,downloads}){
  async function checked(response){if(!response.ok)throw Error(response.status===412?'文件已变化，请刷新后重试':`OneDrive 请求失败（HTTP ${response.status}）`);return response;}
  const json=async(path,options)=>{const r=await checked(await graph(path,options));return r.status===204?{}:r.json();};
  async function pages(path){const items=[];while(path){const p=await json(path);items.push(...(p.value||[]));path=p['@odata.nextLink'];}return items;}
  async function content(id){
-  const meta=await json(item(id)+'?$select='+fields+',@microsoft.graph.downloadUrl');
-  const url=new URL(meta['@microsoft.graph.downloadUrl']);if(url.protocol!=='https:'||url.username||url.password)throw Error('文件下载地址无效');
-  const response=await fetch(url.href,{credentials:'omit',signal:AbortSignal.timeout(120000)});await checked(response);return {meta,response};
+  // OneDrive Personal can omit the download URL when this request uses $select.
+  const metadata=await graph(item(id),{cache:'no-store'});
+  if(!metadata.ok)throw new OneDriveContentError(`读取文件信息失败，HTTP ${metadata.status}`);
+  const meta=await metadata.json();
+  let url;
+  try { url=new URL(meta['@microsoft.graph.downloadUrl']); } catch {
+   throw new OneDriveContentError('OneDrive 未返回有效的文件下载地址');
+  }
+  if(url.protocol!=='https:'||url.username||url.password)throw new OneDriveContentError('文件下载地址无效');
+  const response=await fetch(url.href,{credentials:'omit',signal:AbortSignal.timeout(120000)});
+  if(!response.ok)throw new OneDriveContentError(`下载文件失败，HTTP ${response.status}`);
+  return {meta,response};
  }
  async function collect(meta,files,prefix='',depth=0){
   if(depth>40)throw Error('目录层级过深');

@@ -555,6 +555,9 @@ impl Notebook {
                     workspace::test_key(expected[self.smoke_shortcuts]);
                 }
             }
+            "trello_connection" => {
+                let _ = self.tx.send(Command::Web(v));
+            }
             "trello" if v["op"] == "download_homework_attachment" => {
                 self.download_homework_attachment(v, cx)
             }
@@ -953,6 +956,10 @@ impl Notebook {
             if self.ready && *generation == self.cache_generation {
                 self.js(script);
             }
+            return;
+        }
+        if let Event::TrelloConnection { result } = &event {
+            self.js(&format!("window.cnoteTrello?.receive({result})"));
             return;
         }
         if let Event::Drive { mut result } = event {

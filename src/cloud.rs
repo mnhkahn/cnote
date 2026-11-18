@@ -19,6 +19,8 @@ const AUTH: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0";
 const GRAPH: &str = "https://graph.microsoft.com/v1.0";
 const CLIENT_ID: &str = "e1f582c1-1568-4347-8c5b-1906164e637f";
 const SCOPES: &str = "Files.ReadWrite User.Read offline_access";
+#[path = "cloud/connection.rs"]
+mod connection;
 #[path = "cloud/drive.rs"]
 mod drive;
 #[cfg(not(cnote_shared_core))]
@@ -29,6 +31,7 @@ pub mod finder;
 pub mod finder;
 #[derive(Debug)]
 pub enum Job {
+    TrelloConnection(serde_json::Value),
     Drive(serde_json::Value),
     Restore,
     Login,
@@ -52,6 +55,7 @@ pub struct Item {
 }
 #[derive(Debug)]
 pub enum Reply {
+    TrelloConnection(serde_json::Value),
     Drive(serde_json::Value),
     Account {
         id: String,
@@ -366,6 +370,15 @@ impl Cloud {
     }
     fn run(&mut self, job: Job) -> Result<Reply> {
         match job {
+            Job::TrelloConnection(v) => {
+                let request = v["request"].clone();
+                Ok(Reply::TrelloConnection(match self.trello_connection(&v) {
+                    Ok(data) => serde_json::json!({"request":request,"data":data}),
+                    Err(error) => {
+                        serde_json::json!({"request":request,"error":error.to_string(),"code":connection::error_code(&error)})
+                    }
+                }))
+            }
             Job::Drive(v) => {
                 let request = v["request"].clone();
                 Ok(Reply::Drive(match self.drive_request(&v) {
@@ -556,9 +569,9 @@ pub fn spawn(
                     let _ = tx.send(crate::engine::Command::Network(epoch, Box::new(reply)));
                 };
                 use crate::analytics::{Event as AnalyticsEvent, Operation, Outcome};
-                let drive_request = matches!(&job, Job::Drive(_));
+                let drive_request = matches!(&job, Job::Drive(_) | Job::TrelloConnection(_));
                 let operation = match &job {
-                    Job::Drive(_) => Operation::List,
+                    Job::Drive(_) | Job::TrelloConnection(_) => Operation::List,
                     Job::Restore => Operation::Restore,
                     Job::Login => Operation::Login,
                     Job::Logout => Operation::Logout,

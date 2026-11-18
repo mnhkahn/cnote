@@ -26,6 +26,10 @@ pub enum Command {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    #[serde(rename = "trello")]
+    TrelloConnection {
+        result: Value,
+    },
     CloseFailed {
         message: String,
     },
@@ -446,6 +450,14 @@ impl Engine {
                 },
             )?,
             "drive" => self.job(Job::Drive(v)),
+            "trello_connection" => {
+                anyhow::ensure!(self.authenticated, "请先登录微软账号");
+                anyhow::ensure!(
+                    v["account_id"].as_str() == Some(self.account.as_str()),
+                    "微软账号已切换，请重试"
+                );
+                self.job(Job::TrelloConnection(v));
+            }
             "tool_ready" => {
                 let state = self
                     .db
@@ -779,6 +791,10 @@ impl Engine {
             return Ok(());
         }
         match r {
+            Reply::TrelloConnection(result) => {
+                self.emit(Event::TrelloConnection { result });
+                return Ok(());
+            }
             Reply::Drive(result) => {
                 self.emit(Event::Drive { result });
                 return Ok(());

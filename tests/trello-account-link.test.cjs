@@ -19,8 +19,8 @@ function fixture({linked=false,fail=false,hold=false,supported=true}={}){
  let rejectSave=false;
  const root=new Element('section'),body=new Element('body'),messages=[],deferred=[],state={trelloBoard:'a'.repeat(24)};
  const window={cnoteTools:{state,setTrelloBoard(id){state.trelloBoard=id;}},ipc:{postMessage(raw){const m=JSON.parse(raw);messages.push(m);
-  if(m.type!=='trello')return;
-  const answer=()=>{if(rejectSave&&m.op==='link_account'){rejectSave=false;window.cnoteTrello.receive({request:m.request,error:'保存失败，请重试'});return;}let data;if(m.op==='status')data={connected:true,account_linking:supported,account_id:m.account_id||current,linked};
+  if(!['trello','trello_connection'].includes(m.type))return;
+  const answer=()=>{if(rejectSave&&m.op==='link_account'){rejectSave=false;window.cnoteTrello.receive({request:m.request,error:'保存失败，请重试'});return;}let data;if(m.op==='status')data={connected:true,cloud_available:true,account_linking:supported,account_id:m.account_id||current,linked};
    else if(m.op==='link_status')data={account_name:'微软家长',member:{id:'member-a',fullName:'作业家长'},boards:[{id:'a'.repeat(24),name:'嘉嘉',closed:false}]};
    else if(m.op==='link_account'){linked=true;data={linked:true,board:m.id};}
    if(fail&&m.op==='link_status')window.cnoteTrello.receive({request:m.request,error:'网络暂不可用'});

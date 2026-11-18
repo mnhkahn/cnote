@@ -1,8 +1,10 @@
+import {createConnection} from './connection.mjs';
 import init, { Notebook } from './pkg/cnote_web.js';
-import { PublicClientApplication } from '@azure/msal-browser';
+import { InteractionRequiredAuthError, PublicClientApplication } from '@azure/msal-browser';
 import { diffArrays } from 'diff';
 import { createFeatures } from './features.mjs';
 import {readBytes} from './downloads.mjs';
+import {OneDriveContentError} from './drive.mjs';
 
 let config,features;
 const status = message => { document.getElementById('status').textContent = message;const notice=document.getElementById('web-notice');if(notice)notice.textContent=message; };
@@ -49,10 +51,20 @@ async function open(id,intent) {
  if(mobileLayout.matches)setDrawer(false);
  if(note(id)?.conflict)emit({type:'dialog',kind:'conflict',data:{id}});
 }
-function laterSync() { clearTimeout(syncTimer);syncTimer=setTimeout(()=>sync().catch(()=>status('OneDrive 同步失败，本地草稿已保留')),2000); }
+function laterSync() {
+ clearTimeout(syncTimer);
+ syncTimer=setTimeout(()=>sync(),2000);
+}
+function syncReason(error) {
+ if(error instanceof InteractionRequiredAuthError)return '微软授权需要重新登录';
+ if(error instanceof DOMException && ['TimeoutError','AbortError'].includes(error.name))return '请求超时';
+ if(error instanceof TypeError)return '浏览器无法读取响应，请检查网络';
+ return error instanceof SyncError||error instanceof OneDriveContentError?error.message:'数据读取或保存异常';
+}
+class SyncError extends Error {}
 async function handle(m) {
  switch(m.type) {
-  case 'trello':case 'drive':void features.dispatch(m);break;
+  case 'trello':case 'trello_connection':case 'drive':void features.dispatch(m);break;
   case 'dirty':dirty=true;break;
   case 'clean':dirty=false;break;
   case 'editing':editing.add(m.id);break;
@@ -139,31 +151,49 @@ async function graph(path,options={}) {
  const {accessToken}=await auth.acquireTokenSilent({account:authAccount,scopes});
  return fetch(url,{...options,headers:{...options.headers,Authorization:`Bearer ${accessToken}`},signal:AbortSignal.timeout(25000)});
 }
-async function checked(response) { if(!response.ok)throw Error(`OneDrive 请求失败 (${response.status})`);return response; }
+async function checked(response) { if(!response.ok)throw new SyncError(`HTTP ${response.status}`);return response; }
 async function download(id) {
  const path='/me/drive/items/'+encodeURIComponent(id);
  const {meta:before,response}=await features.content(id);
  const html=new TextDecoder('utf-8',{fatal:true}).decode(await readBytes(response,20*1024*1024));
  const after=await (await checked(await graph(path+'?$select=id,name,eTag'))).json();
- if(before.eTag!==after.eTag)throw Error('云端版本变化，请重试');
+ if(before.eTag!==after.eTag)throw new SyncError('云端版本变化，请重试');
  if(html.length>20*1024*1024)throw Error('笔记超过 20 MB');
  return {html,etag:after.eTag,title:after.name};
 }
 async function sync() {
  if(syncing||!authAccount)return;syncing=true;const account=authAccount.homeAccountId;
+ let stage='读取 Notes 目录', firstFailure;
+ const failedDownloads=new Set();
  try {
   status('正在同步 OneDrive…');let path='/me/drive/root:/Notes:/children?$select=id,name,eTag,file&$top=200',items=[];
   while(path){
    let response=await graph(path);
-   if(response.status===404){await checked(await graph('/me/drive/root/children',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Notes',folder:{},'@microsoft.graph.conflictBehavior':'fail'})}));response=await graph(path);}
+   if(response.status===404&&path.startsWith('/me/drive/root:/Notes:/children?')){
+    stage='创建 Notes 目录';
+    const created=await graph('/me/drive/root/children',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Notes',folder:{},'@microsoft.graph.conflictBehavior':'fail'})});
+    if(created.status!==409)await checked(created);
+    stage='读取 Notes 目录';
+    response=await graph(path);
+   }
    const page=await (await checked(response)).json();items.push(...(page.value||[]).filter(n=>n.file&&n.name.endsWith('.html')));path=page['@odata.nextLink'];
   }
+  if(snapshot().account!==account)return;
   const remote=new Map(items.map(n=>[n.id,n]));
+  stage='下载笔记';
   for(const item of items){
    if(snapshot().account!==account)return;
    const local=snapshot().notes.find(n=>n.account===account&&n.remote_id===item.id);
-   if(local?.etag===item.eTag||editing.has(local?.id))continue;
-   const data=await download(item.id);
+   if((local?.etag&&local.etag===item.eTag)||editing.has(local?.id))continue;
+   let data;
+   try {
+    data=await download(item.id);
+   } catch(error) {
+    if(error instanceof InteractionRequiredAuthError)throw error;
+    failedDownloads.add(item.id);
+    firstFailure??=syncReason(error);
+    continue;
+   }
    await enqueue(async()=>{
     if(snapshot().account!==account||editing.has(local?.id))return;
     if(local){
@@ -173,6 +203,7 @@ async function sync() {
     }else await mutate({type:'import',id:crypto.randomUUID(),remote_id:item.id,title:item.name.replace(/--[a-f0-9]{8}\.html$/i,'').replace(/\.html$/i,''),...data});
    });
   }
+  stage='更新本机笔记';
   for(const cached of snapshot().notes.filter(n=>n.account===account&&n.remote_id&&!remote.has(n.remote_id)&&!n.dirty)){
    await enqueue(async()=>{
     if(snapshot().account!==account||editing.has(cached.id))return;
@@ -181,8 +212,9 @@ async function sync() {
     if(selected===cached.id&&!note(cached.id))emit({type:'load',id:''});
    });
   }
+  stage='上传本机改动';
   for(const sent of snapshot().notes.filter(n=>n.account===account&&n.dirty&&!n.conflict)){
-   if(snapshot().account!==account)return;if(editing.has(sent.id))continue;
+   if(snapshot().account!==account)return;if(editing.has(sent.id)||failedDownloads.has(sent.remote_id))continue;
    if(sent.deleted){
     if(sent.remote_id){
      if(!sent.etag)throw Error('缺少删除版本');const response=await graph('/me/drive/items/'+encodeURIComponent(sent.remote_id),{method:'DELETE',headers:{'If-Match':sent.etag}});
@@ -213,8 +245,12 @@ async function sync() {
    const item=await (await checked(response)).json();
    await enqueue(()=>snapshot().account===account?mutate({type:'uploaded',id:sent.id,revision:sent.revision,html:sent.html,remote_id:item.id,etag:item.eTag}):null);
   }
+  if(snapshot().account!==account)return;
   const pending=snapshot().notes.filter(n=>n.account===account&&(n.dirty||n.conflict)).length;
-  status(pending?`本机已保存 · ${pending} 篇笔记待同步或处理冲突`:'本机已保存 · OneDrive 同步检查完成');
+  const result=pending?`本机已保存 · ${pending} 篇笔记待同步或处理冲突`:'本机已保存 · OneDrive 同步检查完成';
+  status(failedDownloads.size?`OneDrive 有 ${failedDownloads.size} 篇笔记未下载（${firstFailure}），本地草稿已保留`:result);
+ } catch(error) {
+  if(snapshot().account===account)status(`OneDrive 同步失败：${stage}（${syncReason(error)}），本地草稿已保留`);
  } finally { syncing=false; }
 }
 // Notes-only compatibility surface: there is no tool draft to flush.
@@ -295,7 +331,7 @@ try {
  await auth.initialize();
  const compareNote=window.cnoteTools.compareNote;
  const store={get:key=>transact('readonly',s=>s.get(key)),set:(key,value)=>transact('readwrite',s=>s.put(value,key))};
- features=await createFeatures({store,graph,fetch,compareNote,getAccount:()=>authAccount,onShow(){setDrawer(false);features?.account(authAccount);}});
+ features=await createFeatures({store,graph,fetch,compareNote,connection:createConnection({fetch,getAccessToken:async()=>{if(!authAccount)throw Error('请先登录微软账号');return (await auth.acquireTokenSilent({account:authAccount,scopes})).accessToken;}}),getAccount:()=>authAccount,onShow(){setDrawer(false);features?.account(authAccount);}});
  authAccount=auth.getAllAccounts().find(a=>a.homeAccountId===snapshot().account)||null;if(authAccount)auth.setActiveAccount(authAccount);
  const preference=localStorage.getItem('cnote-web-theme')||'system';window.cnoteTheme.set(preference);document.getElementById('theme').value=preference;
  window.ipc.postMessage=message=>{const m=JSON.parse(message);enqueue(()=>handle(m)).catch(()=>status('操作未完成，本地草稿保留；请重试或导出笔记'));};

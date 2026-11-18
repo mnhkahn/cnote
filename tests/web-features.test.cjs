@@ -15,7 +15,8 @@ test('OneDrive pagination and preauthenticated content never forward an OAuth to
  const drive=createDrive({graph:async url=>{calls.push(url);if(url.includes('/children'))return json({value:[{id:'one'}],'@odata.nextLink':'https://graph.microsoft.com/v1.0/next'});if(url.endsWith('/next'))return json({value:[{id:'two'}]});return json({id:'file',name:'文章.txt',eTag:'v1',folder:{},'@microsoft.graph.downloadUrl':'https://storage.example/document'});},fetch:async(url,options)=>{assert.equal(url,'https://storage.example/document');assert.equal(options.credentials,'omit');assert.equal(options.headers,undefined);return new Response('正文');},downloads:{}});
  assert.equal((await drive.request({op:'list'})).items.length,2);
  const result=await drive.request({op:'read',id:'file'});assert.equal(result.text,'正文');assert.equal(result.item.eTag,'v1');
- assert(!calls.some(url=>url.endsWith('/content')));
+ assert(calls.includes('/me/drive/items/file'));
+ assert(!calls.some(url=>url.includes('@microsoft.graph.downloadUrl')||url.endsWith('/content')));
 });
 test('OneDrive writes retain ETag guards and reject unsafe names before requests',async()=>{
  const [{createDrive}]=await modules;const calls=[];
@@ -43,7 +44,7 @@ test('homework uses Trello directly and only reads card and attachment metadata'
  const key = 'a'.repeat(32), token = 'b'.repeat(64), id = 'c'.repeat(24);
  const authorization = new URL(trelloAuthorization(key));
  assert.equal(authorization.origin, 'https://trello.com');
- assert.equal(authorization.searchParams.get('scope'), 'read');
+ assert.equal(authorization.searchParams.get('scope'), 'read,write');
 
  const calls = [];
  const session = new Map();

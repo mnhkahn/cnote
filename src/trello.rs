@@ -15,6 +15,8 @@ static AUTH: Mutex<Session> = Mutex::new(Session {
     auth: None,
     account: String::new(),
     account_name: String::new(),
+    pending_connection: false,
+    remote_revision: String::new(),
 });
 #[derive(Default)]
 struct Session {
@@ -22,6 +24,8 @@ struct Session {
     auth: Option<Credentials>,
     account: String,
     account_name: String,
+    pending_connection: bool,
+    remote_revision: String,
 }
 impl Session {
     fn restore_with(
@@ -36,6 +40,12 @@ impl Session {
     }
     fn auth(&mut self) -> Result<Option<Credentials>> {
         let account = self.account.clone();
+        if !self.loaded
+            && let Some(record) = links()?.get(&account)
+        {
+            self.pending_connection = record.pending;
+            self.remote_revision = record.cloud_revision.clone().unwrap_or_default();
+        }
         self.restore_with(|| stored_for(&account))
     }
 }
@@ -47,6 +57,8 @@ pub fn account_changed(account: &str, name: &str) {
             session.account = account.into();
             session.loaded = false;
             session.auth = None;
+            session.pending_connection = false;
+            session.remote_revision.clear();
         }
         session.account_name = name.into();
     }
@@ -72,13 +84,17 @@ struct Credentials {
     key: String,
     token: String,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct AccountLink {
     credentials: Credentials,
     member_id: String,
     member_name: String,
     board_id: String,
     board_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cloud_revision: Option<String>,
+    #[serde(default)]
+    pending: bool,
 }
 type AccountLinks = std::collections::BTreeMap<String, AccountLink>;
 fn links() -> Result<AccountLinks> {
@@ -100,6 +116,93 @@ fn select_credentials(
 }
 fn stored_for(account: &str) -> Result<Option<Credentials>> {
     Ok(select_credentials(account, &links()?, stored()?))
+}
+pub fn connection_account() -> Result<String> {
+    Ok(AUTH
+        .lock()
+        .map_err(|_| anyhow::anyhow!("作业连接状态异常"))?
+        .account
+        .clone())
+}
+pub fn connection_sync_state(account: &str) -> Result<(bool, String)> {
+    let mut session = AUTH
+        .lock()
+        .map_err(|_| anyhow::anyhow!("作业连接状态异常"))?;
+    anyhow::ensure!(session.account == account, "微软账号已切换，请重试");
+    session.auth()?;
+    Ok((session.pending_connection, session.remote_revision.clone()))
+}
+pub fn connection_revision(account: &str, revision: &str) -> Result<()> {
+    let mut session = AUTH
+        .lock()
+        .map_err(|_| anyhow::anyhow!("作业连接状态异常"))?;
+    anyhow::ensure!(session.account == account, "微软账号已切换，请重试");
+    session.remote_revision = revision.into();
+    Ok(())
+}
+pub fn connection_snapshot(account: &str) -> Result<Option<(String, Value)>> {
+    let session = AUTH
+        .lock()
+        .map_err(|_| anyhow::anyhow!("作业连接状态异常"))?;
+    anyhow::ensure!(
+        session.account == account && !account.is_empty(),
+        "微软账号已切换，请重试"
+    );
+    Ok(links()?.get(account).map(|record| (record.cloud_revision.clone().unwrap_or_default(), json!({
+        "credentials":record.credentials,"member_id":record.member_id,"member_name":record.member_name,
+        "board_id":record.board_id,"board_name":record.board_name
+    }))))
+}
+pub fn restore_connection(account: &str, revision: &str, value: Value) -> Result<()> {
+    anyhow::ensure!(!revision.is_empty(), "云端作业连接版本无效");
+    let mut record: AccountLink = serde_json::from_value(value).context("云端作业连接格式无效")?;
+    credentials(&serde_json::to_value(&record.credentials)?)?;
+    identifier(&json!({"id":record.board_id}))?;
+    identifier(&json!({"id":record.member_id}))?;
+    record.cloud_revision = Some(revision.into());
+    record.pending = false;
+    let mut session = AUTH
+        .lock()
+        .map_err(|_| anyhow::anyhow!("作业连接状态异常"))?;
+    anyhow::ensure!(
+        session.account == account && !account.is_empty(),
+        "微软账号已切换，请重试"
+    );
+    let mut records = links()?;
+    if records
+        .get(account)
+        .is_none_or(|existing| existing != &record)
+    {
+        records.insert(account.into(), record.clone());
+        crate::credential_store::set("trello-links", &serde_json::to_string(&records)?)?;
+    }
+    session.auth = Some(record.credentials);
+    session.loaded = true;
+    session.pending_connection = false;
+    session.remote_revision = revision.into();
+    Ok(())
+}
+pub fn clear_missing_connection(account: &str) -> Result<()> {
+    let mut session = AUTH
+        .lock()
+        .map_err(|_| anyhow::anyhow!("作业连接状态异常"))?;
+    anyhow::ensure!(session.account == account, "微软账号已切换，请重试");
+    let mut records = links()?;
+    if let Some(previous) = records
+        .get(account)
+        .filter(|r| r.cloud_revision.is_some())
+        .cloned()
+    {
+        // Mark the legacy token disconnected before removing its owner mapping.
+        if stored()? == Some(previous.credentials) {
+            crate::credential_store::remove("trello-auth")?;
+        }
+        records.remove(account);
+        crate::credential_store::set("trello-links", &serde_json::to_string(&records)?)?;
+        session.auth = None;
+        session.loaded = true;
+    }
+    Ok(())
 }
 fn stored() -> Result<Option<Credentials>> {
     crate::credential_store::get("trello-auth")?
@@ -473,10 +576,6 @@ pub fn request(v: Value) -> Result<Value> {
             if v["account_id"].as_str() != Some(session.account.as_str()) {
                 bail!("微软账号已切换，请重新确认关联");
             }
-            let records = links()?;
-            if v["op"] == "link_status" && records.contains_key(&session.account) {
-                return Ok(json!({"linked":true}));
-            }
             let auth = session.auth()?.ok_or(AuthRequired)?;
             let account = session.account.clone();
             let account_name = session.account_name.clone();
@@ -508,6 +607,8 @@ pub fn request(v: Value) -> Result<Value> {
                 member_name: member["fullName"].as_str().unwrap_or_default().into(),
                 board_id: board_id.clone(),
                 board_name: board["name"].as_str().unwrap_or_default().into(),
+                cloud_revision: None,
+                pending: true,
             };
             let mut session = AUTH
                 .lock()
@@ -530,11 +631,16 @@ pub fn request(v: Value) -> Result<Value> {
             let member = api.get("/members/me", &[("fields", "id,fullName,username")])?;
             crate::credential_store::set("trello-auth", &serde_json::to_string(&api.auth)?)?;
             let mut records = links()?;
-            if !session.account.is_empty() && records.remove(&session.account).is_some() {
+            if !session.account.is_empty()
+                && let Some(record) = records.get_mut(&session.account)
+            {
+                record.credentials = api.auth.clone();
+                record.pending = true;
                 crate::credential_store::set("trello-links", &serde_json::to_string(&records)?)?;
             }
             session.loaded = true;
             session.auth = Some(api.auth.clone());
+            session.pending_connection = true;
             return Ok(json!({"connected":true,"name":member["fullName"]}));
         }
         "disconnect" => {
@@ -545,6 +651,8 @@ pub fn request(v: Value) -> Result<Value> {
             crate::credential_store::remove("trello-auth")?;
             session.loaded = true;
             session.auth = None;
+            session.pending_connection = false;
+            session.remote_revision.clear();
             return Ok(json!({"connected":false}));
         }
         "link_board" => {
@@ -722,6 +830,8 @@ mod tests {
             member_name: "家长".into(),
             board_id: "board-a".into(),
             board_name: "嘉嘉".into(),
+            cloud_revision: None,
+            pending: false,
         };
         let mut records = AccountLinks::from([("microsoft-a".into(), record.clone())]);
         assert!(select_credentials("microsoft-a", &records, None) == Some(legacy.clone()));

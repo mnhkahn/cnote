@@ -2,11 +2,11 @@ import {createDownloads} from './downloads.mjs';
 import {createDrive} from './drive.mjs';
 import {createTrello, trelloAuthorization} from './trello.mjs';
 
-export async function createFeatures({store,graph,fetch,compareNote,onShow,getAccount,storage=sessionStorage}){
+export async function createFeatures({store,graph,fetch,compareNote,onShow,getAccount,connection,storage=sessionStorage}){
  let workspace=0,state=await store.get('tools')||{},saving=Promise.resolve();
  const persist=()=>{const value=structuredClone(state);saving=saving.catch(()=>{}).then(()=>store.set('tools',value));return saving;};
  const downloads=createDownloads(document,URL);
- const trello=createTrello({fetch,storage});
+ const trello=createTrello({fetch,storage,connection,getAccount});
  function drive(){const account=getAccount();const guard=()=>{if(getAccount()!==account)throw Error('OneDrive 账号已变化，请重试');};return createDrive({graph:(...args)=>{guard();return graph(...args);},fetch,downloads:{save(...args){guard();return downloads.save(...args);},zip(...args){guard();return downloads.zip(...args);}}});}
  function show(index){
   if(![0,4,5].includes(index))return;
@@ -28,9 +28,9 @@ export async function createFeatures({store,graph,fetch,compareNote,onShow,getAc
  };
  document.getElementById('drive-download').textContent='下载';document.getElementById('drive-open').textContent='下载文件';
  const lastWorkspace=[0,4,5].includes(state.workspace)?state.workspace:0;
- return {show,initialWorkspace:lastWorkspace,content:(...args)=>drive().content(...args),account(account){window.cnoteDrive.account(!!account,account?.name||'');document.getElementById('web-account-login').hidden=workspace!==5||!!account;},
+ return {show,initialWorkspace:lastWorkspace,content:(...args)=>drive().content(...args),account(account){window.cnoteDrive.account(!!account,account?.name||'');window.cnoteTrello.account?.(!!account,account?.homeAccountId||'');document.getElementById('web-account-login').hidden=workspace!==5||!!account;},
   async dispatch(m){
-   const isTrello=m.type==='trello';
+   const isTrello=m.type==='trello'||m.type==='trello_connection';
    const target=isTrello?window.cnoteTrello:window.cnoteDrive;
    try{const data=await (isTrello?trello.request(m):drive().request(m));target.receive({request:m.request,data});}
    catch(error){target.receive({request:m.request,error:error.message,code:error.code});}
