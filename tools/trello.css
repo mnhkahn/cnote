@@ -29,3 +29,12 @@
 .trello-settings-actions{display:flex;gap:8px;flex-shrink:0}
 
 .trello-account-link{box-sizing:border-box;width:min(460px,calc(100vw - 32px));max-height:calc(100dvh - 40px);overflow:auto;padding:24px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink)}.trello-account-link::backdrop{background:#0006}.trello-account-link h2{font-size:18px;margin:0 0 14px}.trello-account-link p{line-height:1.6;overflow-wrap:anywhere}.trello-account-link label{display:block;margin:16px 0 6px}.trello-account-link select{box-sizing:border-box;width:100%;padding:8px;background:var(--bg);color:inherit;border:1px solid var(--line);border-radius:5px}.trello-account-link button{padding:8px 14px;margin:8px 8px 0 0;cursor:pointer}.trello-account-link button.primary{background:var(--accent);color:white;border:1px solid var(--accent);border-radius:5px}
+
+.trello-review-header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:24px 0 8px}
+.trello-detail-body .trello-review-header h3{margin:0}
+.trello-review-history>[role=status]:empty{display:none}
+.trello-review-entry{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
+.trello-review-entry p{margin:0 0 6px}
+.trello-review-grade{display:inline-block;padding:2px 8px;border-radius:8px;background:var(--soft);font-weight:700}
+.trello-review-text{white-space:pre-wrap;user-select:text}
+.trello-review-entry audio{width:100%}

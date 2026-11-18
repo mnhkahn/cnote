@@ -335,7 +335,7 @@
   const content=node('div',null,'trello-image-content');content.append(viewport,recognition.panel);
   dialog.append(toolbar,status,content);root.append(dialog);const observer=new ResizeObserver(()=>{if(fit)layout();});const current={dialog,observer};imageViewer=current;dialog.addEventListener('cancel',event=>{event.preventDefault();closeImageViewer();});dialog.showModal();observer.observe(viewport);
   imageMenu(image,attachment,cardId,feedback);
-  image.onload=layout;image.src=thumbnail;
+  image.onload=layout;if(thumbnail)image.src=thumbnail;
   let drag=null;viewport.onpointerdown=event=>{if(event.button!==0)return;drag={x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop};viewport.setPointerCapture(event.pointerId);viewport.classList.add('dragging');event.preventDefault();};viewport.onpointermove=event=>{if(drag){viewport.scrollLeft=drag.left+drag.x-event.clientX;viewport.scrollTop=drag.top+drag.y-event.clientY;}};viewport.onpointerup=viewport.onpointercancel=()=>{drag=null;viewport.classList.remove('dragging');};
   const loadOriginal=async()=>{
    status.replaceChildren(node('span','正在加载原图…'));
@@ -343,7 +343,7 @@
     let original=originalImages.get(attachment.id);
     if(!original){original=request('attachment',cardId,{attachment:attachment.id,original:true}).then(result=>{if(epoch!==detailEpoch)return null;if(!result.mime?.startsWith('image/'))throw Error('附件不是可预览的图片');originalData.set(attachment.id,result);const bytes=Uint8Array.from(atob(result.base64),c=>c.charCodeAt(0));const url=URL.createObjectURL(new Blob([bytes],{type:result.mime}));mediaUrls.add(url);return url;});originalImages.set(attachment.id,original);}
     const url=await original;if(!url||imageViewer!==current||epoch!==detailEpoch)return;
-    image.onload=()=>{if(imageViewer===current){layout();status.textContent=`原图 · ${image.naturalWidth} × ${image.naturalHeight} 像素`;}};image.onerror=()=>{if(imageViewer===current){originalImages.delete(attachment.id);originalData.delete(attachment.id);URL.revokeObjectURL(url);mediaUrls.delete(url);image.onerror=null;image.src=thumbnail;status.replaceChildren(node('span','原图无法解码'),button('重试原图',loadOriginal));}};image.src=url;
+    image.onload=()=>{if(imageViewer===current){layout();status.textContent=`原图 · ${image.naturalWidth} × ${image.naturalHeight} 像素`;}};image.onerror=()=>{if(imageViewer===current){originalImages.delete(attachment.id);originalData.delete(attachment.id);URL.revokeObjectURL(url);mediaUrls.delete(url);image.onerror=null;if(thumbnail)image.src=thumbnail;else image.removeAttribute('src');status.replaceChildren(node('span','原图无法解码'),button('重试原图',loadOriginal));}};image.src=url;
    }catch(error){originalImages.delete(attachment.id);originalData.delete(attachment.id);if(imageViewer===current&&epoch===detailEpoch)status.replaceChildren(node('span',error.message),button('重试原图',loadOriginal));}
   };loadOriginal();
  }
@@ -437,7 +437,75 @@
    return {...review,id:action.id,date:action.date};
   }catch{return null;}
  }
- function renderHomework(body,card,attachments,epoch,saved){
+ function renderHomeworkReviews(body,card,epoch,initial){
+  const section=node('section',null,'trello-review-history'),header=node('div',null,'trello-review-header');
+  const status=node('p');status.setAttribute('role','status');
+  const entries=node('div',null,'trello-review-entries');
+  const formatDate=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+  const symbols=new Map([['100','🏆'],['优','★'],['良','✓'],['中','●'],['差','△']]);
+  let refreshId=0;
+  const refresh=button('刷新批改',()=>reload());
+  header.append(node('h3','批改结果'),refresh);section.append(header,status,entries);body.append(section);
+  function display(data){
+   if(!Array.isArray(data.actions)){status.textContent='批改结果加载失败';return;}
+   const reviews=[...new Map(data.actions.map(homeworkReview).filter(Boolean).map(review=>[review.id,review])).values()]
+    .sort((a,b)=>Date.parse(b.date)-Date.parse(a.date));
+   status.textContent=reviews.length?'':'还没有批改结果';
+   entries.replaceChildren();
+   for(const [index,review] of reviews.entries()){
+    const entry=node('article',null,'trello-review-entry');
+    entries.append(entry);
+    const timestamp=new Date(review.date);
+    entry.append(node('p',`${index===0?'最新批改':'历史批改'} · ${Number.isFinite(+timestamp)?formatDate.format(timestamp):review.date||''}`));
+    const symbol=symbols.get(review.grade);
+    if(symbol){
+     const label=review.grade==='100'&&review.provisional!==true?'本次评分 · 满分 100 分':`本次评分 · ${review.provisional===true?'暂评·':''}${review.grade}`;
+     entry.append(node('p',`${symbol} ${label}`,'trello-review-grade'));
+    }
+    if(typeof review.has_errors==='boolean')entry.append(node('p',review.has_errors?'本次批改有错，请查看订正要求':'本次批改通过'));
+    if(review.type==='text'){
+     const text=review.text.split(/\r?\n/).filter(line=>!(symbol&&/^打分结果[:：]/.test(line.trim()))&&!/^第\d+[题项]：正确[。.]?(?:正确[。.]?)?$/.test(line.trim())).join('\n').trim();
+     if(text)entry.append(linkedText('div',text,'trello-review-text'));
+    }else{
+     const attachment=data.attachments?.find(a=>a.id===review.attachment_id.trim());
+     if(!attachment)entry.append(node('p',data.partial?'批改附件加载失败':'批改附件已删除或尚未上传，请联系家长重新提交'));
+     else if(readOnly())entry.append(button(review.type==='image'?'查看批改图片':'播放批改音频',()=>openLink(attachment.url||card.url)));
+     else{
+      const matches=review.type==='image'?/\.(jpg|jpeg|png|webp|gif)$/i:/\.(m4a|mp3|wav|aac|ogg|opus|amr|3gp)$/i;
+      if(attachment.mimeType?.toLowerCase().startsWith(review.type+'/')||matches.test(attachment.name||'')){
+       if(review.type==='image')entry.append(button('查看批改图片（可缩放）',()=>openImageViewer(attachment,card.id,epoch)));
+       else{
+        const play=button('播放批改音频',async()=>{
+         play.disabled=true;
+         try{
+          const result=await request('attachment',card.id,{attachment:attachment.id,original:true});
+          if(epoch!==detailEpoch||!play.isConnected)return;
+          if(!result.mime?.startsWith('audio/'))throw Error('批改附件格式与声明不符');
+          const bytes=Uint8Array.from(atob(result.base64),c=>c.charCodeAt(0));
+          const url=URL.createObjectURL(new Blob([bytes],{type:result.mime}));mediaUrls.add(url);
+          const audio=node('audio');audio.controls=true;audio.src=url;audio.setAttribute('aria-label','批改音频');
+          play.replaceWith(audio);audio.play().catch(()=>{});
+         }catch(error){if(play.isConnected){play.textContent=error.message+'，重试播放';play.disabled=false;}}
+        });
+        entry.append(play);
+       }
+      }
+      else entry.append(node('p','批改附件格式与声明不符，请联系家长检查'));
+     }
+    }
+   }
+  }
+  async function reload(){
+   const id=++refreshId;
+   refresh.disabled=true;status.textContent='正在加载批改结果…';
+   try{const data=await request('card',card.id);if(epoch===detailEpoch&&id===refreshId)display(data);}
+   catch(error){if(epoch===detailEpoch&&id===refreshId)status.textContent=error.message;}
+   finally{if(id===refreshId)refresh.disabled=false;}
+  }
+  display(initial);
+  return reload;
+ }
+ function renderHomework(body,card,attachments,epoch,saved,refreshReviews){
   const fields=homeworkFields(card);if(!fields.kind)return;
   const section=node('section',null,'trello-homework-review'),status=node('p'),actions=node('div',null,'trello-homework-actions');status.setAttribute('role','status');
   const reading=fields.kind==='reading';
@@ -468,7 +536,7 @@
   };
   const display=(data,apply=false)=>{
    actions.replaceChildren();publicationPending=data.published===false;sync();
-   if(data.published===true){status.textContent='阅卷结果已保存到 Trello';if(apply)applyPublication(data);}
+   if(data.published===true){status.textContent='阅卷结果已保存到 Trello';if(apply){applyPublication(data);refreshReviews();}}
    else if(publicationPending){
     status.textContent='阅卷完成，保存失败：'+(data.publication_error||'请重试保存结果');
     const retry=button('重试保存结果',async()=>{
@@ -499,7 +567,8 @@
    if(full.labels?.length)body.append(node('p','标签：'+full.labels.map(l=>l.name||l.color).join('、')));
    if(full.members?.length)body.append(node('p','成员：'+full.members.map(m=>m.fullName||m.username).join('、')));
    for(const checklist of full.checklists||[]){body.append(node('h3',checklist.name));for(const item of checklist.checkItems||[])body.append(linkedText('p',(item.state==='complete'?'☑ ':'☐ ')+item.name));}
-   if(!readOnly())renderHomework(body,full,data.attachments||[],epoch,data.homework_review);
+   const refreshReviews=renderHomeworkReviews(body,full,epoch,data);
+   if(!readOnly())renderHomework(body,full,data.attachments||[],epoch,data.homework_review,refreshReviews);
    body.append(node('h3','附件'));
    if(readOnly()&&data.attachments?.length){
     const names=node('ul');
