@@ -25,19 +25,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-      - run: npm ci
       - name: Install matching WASM binding generator
         run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
       - run: cargo fmt --manifest-path web/core/Cargo.toml -- --check
       - run: cargo clippy --manifest-path web/core/Cargo.toml --locked --all-targets -- -D warnings
       - run: cargo test --manifest-path web/core/Cargo.toml --locked
-      - name: Build Web workspaces
+      - name: Export WASM core and shared resources
         run: npm run build:web
         env:
           CNOTE_WEB_VERSION: ${{ github.ref_name }}
-          CNOTE_WEB_CLIENT_ID: ${{ vars.CNOTE_WEB_CLIENT_ID }}
-      - run: node --test tests/web-features.test.cjs
       - name: Archive Web artifact
         run: |
           tar -czf dist/cnote-web.tar.gz -C dist/cnote-web .

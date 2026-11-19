@@ -29,7 +29,8 @@ impl Cloud {
         body: Option<&Value>,
     ) -> Result<Value> {
         let token = self.token()?;
-        let client = Client::builder()
+        // Android supplies its TLS verifier through the shared HTTP factory.
+        let client = crate::http::client()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(25))

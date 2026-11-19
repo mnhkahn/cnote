@@ -227,10 +227,8 @@ CNote 内置 Trello REST API 客户端，无需安装其他程序。未关联时
 
 ## 笔记页 Web / WASM 导出
 
-独立构建和 GitHub Actions 导出说明见 [web/README.md](web/README.md)。只包含笔记工作区，不改变桌面应用和其他工具页。
+WASM 核心与共享页面资源的导出见 [web/README.md](web/README.md)。最终页面由 [cyeam_web](https://github.com/mnhkahn/cyeam_web/tree/master/frontend/cnote) 构建，浏览器专属改动在宿主发布。
 
 ## 通用共享核心与页面
 
 笔记、Trello、OneDrive 的通用核心和页面导出见 [共享说明](shared/README.md)。本仓库输出通用源码及页面包；Android 的 SO、JNI 和 AAR 由 `cnote-android` 构建，桌面继续使用原入口和功能。
-
-Web 构建提供 CNote、作业（只读）和 OneDrive，见 [Web 说明](web/README.md)。

@@ -1,68 +1,11 @@
-# CNote Web / WASM
+# CNote WASM 核心
 
-提供 CNote 笔记、作业和 OneDrive。浏览器复用文件管理页面，通过 Microsoft Graph 操作文件。
-富文本编辑器、样式、配色、表格粘贴和标题提取复用仓库源码；浏览器笔记状态、修订确认和冲突校验由 `web/core` 编译为真正的 WASM，浏览器存储/登录/网络由 JS 适配。
-这不是把 GPUI 应用整体编译到浏览器，也尚未将桌面 `engine.rs` 改造成两端共用的同步引擎。桌面实现不变。
-
-## 构建
-
-在仓库根目录运行（Rust 1.96+，Node 22+）：
+这个目录维护浏览器可调用的 Rust 笔记核心。WASM 暴露 `Notebook` 的快照、视图和命令接口，处理笔记状态、修订和冲突。浏览器登录、凭据缓存、IndexedDB、网络以及最终页面构建由 [cyeam_web](https://github.com/mnhkahn/cyeam_web/tree/master/frontend/cnote) 维护。
 
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.130 --locked
-npm ci
 npm run build:web
-npm run test:web-features
 ```
 
-输出 `dist/cnote-web/`，包含 `index.html`、编辑器资源、适配脚本、`pkg/*.wasm`、Microsoft 登录回调页、配置、版本与校验文件。GitHub Actions 的 **Export CNote WebAssembly** 工作流自动构建和测试并上传压缩包；支持分支、PR、tag 与手动触发，不部署网站、不修改其他仓库，不需要发布/部署密钥。
-
-## 托管与登录
-
-把输出目录原样放到 HTTP(S) 静态目录，例如 `/note/`；只允许 HTTPS 或 localhost，不支持双击 `file://`。`.wasm` 应使用 `application/wasm` MIME。可本地运行 `python3 -m http.server 8080 --directory dist/cnote-web`。
-相对路径允许部署到任意子目录，页面入口需以 `/` 结尾或显式使用 `index.html`。
-
-配置 `config.json` 的公开 `clientId`（可用构建变量 `CNOTE_WEB_CLIENT_ID` 覆盖）；在该 Microsoft 应用注册中添加实际 `https://域名/目录/auth.html` 为 **SPA redirect URI**，权限为个人账号 `Files.ReadWrite`、`User.Read`。客户端不需要也不接受 client secret。默认公开 client ID 沿用已有网页，但新回调地址需要在 Microsoft 应用中登记，不能仅靠构建完成登录配置。
-MSAL v5 使用独立回调桥接页，参考 https://learn.microsoft.com/en-us/entra/msal/javascript/browser/redirect-bridge 。不要把笔记主页面代码放入回调页。
-
-登录凭据由 MSAL 放入 sessionStorage，与 IndexedDB 的笔记正文分开。退出登录保留原账号的本地笔记；离线创建且未归属的笔记在下一次登录时归入该账号。每个浏览器 origin 使用一个 IndexedDB 数据库；Web Locks 限制同一 origin 同时只能有一个可编辑标签页，防止全量快照相互覆盖。浏览器隐私模式、存储配额和清理网站数据均会影响本地持久性，请使用 HTML 导出保留副本。
-
-## OneDrive
-
-顶部选择器在 CNote 和 OneDrive 之间切换，保留笔记编辑状态。
-OneDrive 与笔记共用微软登录，支持目录、搜索、上传、新建文件夹/文本、重命名、移动、删除、文本编辑和下载。浏览器读取 `@microsoft.graph.downloadUrl` 后不带 OAuth 头下载内容，保留 ETag 防覆盖。Web 不挂载云盘，也不提供本机 OCR。
-
-多文件或文件夹下载打包为 ZIP，单次最多 200 MB。页面保留可手动点击的“保存”链接，兼容需要新点击手势的浏览器。单文件按浏览器下载设置保存，不会声称自动创建系统 `下载/CNote` 目录。
-
-## 浏览器适配边界
-
-- 编辑中的笔记先写 IndexedDB，事务成功后才确认保存；失败保留编辑器草稿并重试。关闭页面时若尚未确认保存会触发浏览器提示，但浏览器强制退出仍可能丢失尚未持久化的输入。
-- OneDrive 保留 `Notes/*.html` 格式；分页读取、条件上传/删除、修订确认、冲突保留与合并。新建使用唯一文件名；云端删除后本地草稿保留。实际 Microsoft 登录与跨设备同步需要使用真实账号验证，自动化测试只使用模拟 Graph 响应。
-- 粘贴链接标题：浏览器受目标网站 CORS 限制。允许 CORS 的网页可直接获取；失败保留网址。可选 `metadataEndpoint` 只接受同源 URL，服务契约为 `GET ?url=...` 返回 `{"title":"..."}`；宿主后端需自行实现有限时、限大小和目标地址校验的取标题服务。本产物没有第三方代理，也不包含该后端。
-- 图片复制受 Clipboard API、用户授权和图片 CORS 限制，失败保留原图。打印与 HTML 下载使用浏览器功能。
-- 不含 Service Worker；已打开的页面可以离线编辑，离线冷启动缓存不是本次范围。导出产物不会自动更新现有 `cyeam_web`，接入与部署应另行完成。
-
-## 与 cyeam_web 发布衔接
-
-正式 tag 发布工作流复用 Web 构建，等待桌面包和 Web 包全部通过，再将 `cnote-web.tar.gz` 与 `cnote-web.tar.gz.sha256` 一起上传到 GitHub Release，上传完整后公开 Release。普通分支/PR 继续仅产生 Actions 临时产物。
-
-`cyeam_web` 在自己的部署 Action 中获取最新正式 Release、校验压缩包及内部文件，再放入 Docker 构建上下文。它不在 Docker 内编译 Rust，也不依赖 Actions 临时产物。网站部署仍由网站自己的推送或手动部署触发；CNote 发布不会自动触发网站部署。
-
-`cyeam_web` 宿主把 `redirectUri` 设为原先已登记的 `/note`，不要求新增 `/note/auth.html`。该入口收到授权响应时只加载现有 `auth.js` 桥接脚本，正常访问才跳转到版本化笔记页；不会在登录弹窗里初始化 WASM、打开 IndexedDB 或争抢 Web Lock。旧的独立回调页仍保留，方便其他静态宿主使用。
-
-## 手机布局
-
-宽度不超过700px，或无悬停指针的触屏设备宽度不超过1000px时，正文占满屏幕，笔记列表默认收起为遮罩抽屉；点“笔记”打开，选择当前或其他笔记、新建笔记、点遮罩或按Esc均可收起。编辑工具栏单行横向滑动，打印和HTML导出位于“更多”。触摸按钮扩大，并按可视视口高度及安全区域调整布局。桌面继续使用原有250px侧栏和工具栏。图片操作条遵循隐藏状态，仅在选中图片时显示；修复仅作用于Web导出样式。
-
-`npm run test:web` 包含Chromium和WebKit的320/390/700px手机布局、844px触屏横屏、抽屉、保存恢复、导出/打印、图片选中及1280px桌面切换回归。键盘空间使用缩小视口验证；该检查不替代iPhone/Android真机与系统软键盘验证。
-
-## 作业
-
-使用 Trello API Key 和只读 Token 关联看板。浏览器直接访问 Trello REST API，在当前标签页保留授权，并记住最近选择的看板。可按日期查看卡片和进度，图片和音频通过卡片里的「在 Trello 打开」查看。
-
-## 跨设备作业连接
-
-与原生端共用同源 `/api/cnote/trello-connection`（GET/PUT/DELETE）。`cyeam_web` 提供该接口；静态托管本身不能完成授权同步。浏览器用现有 Microsoft Graph access token 验证微软身份，服务端不保存微软令牌。首次 Trello 授权并选看板后，服务端加密保存连接；其他设备只需登录相同微软账号即可恢复。浏览器恢复的 Trello Token 仅保留在页面内存，原生端使用系统安全存储。接口失败时保留已有本机授权，不伪造跨设备关联成功。
-
-新授权申请 `read,write` 和长期有效授权，以便原生端恢复后继续提交和批改；Web 业务仍以查看为主。重新授权后，新的本机授权会等待用户确认保存，不被旧的云端授权覆盖。看板变更和断开连接使用服务端 revision 条件更新，防止旧设备覆盖新连接。
+输出 `dist/cnote-web/`，包含 `pkg/` 下的 WASM 与生成绑定、`shared/` 下的可复用编辑器和工具资源，以及版本、许可证和校验文件。该目录是构建输入，可复制到 Web 宿主后组装页面。正式 CNote tag 仍发布同名 `cnote-web.tar.gz` 和校验文件，包的 `version.json` 用 `cnote-wasm-core-v1` 标识新格式。Web 宿主自行构建和部署，不需要为独立的浏览器改动重新发布 Rust 核心。
