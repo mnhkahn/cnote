@@ -63,6 +63,9 @@ fn run() -> anyhow::Result<()> {
             }
         }
     });
+    if std::env::var_os("CNOTE_SMOKE_TEST").is_none() {
+        trello::notifications::start();
+    }
     application.run(move |cx: &mut App| {
         if let Err(e) = cx
             .text_system()

@@ -1,6 +1,9 @@
 //! Native Trello API client. User credentials live only in Keychain.
 #[path = "trello_download.rs"]
 pub mod download;
+#[cfg(not(cnote_shared_core))]
+#[path = "trello_notifications.rs"]
+pub mod notifications;
 #[path = "trello_review.rs"]
 mod review;
 use anyhow::{Context, Result, bail};

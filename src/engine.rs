@@ -465,6 +465,10 @@ impl Engine {
                     .map(|s| serde_json::from_str(&s))
                     .transpose()?
                     .unwrap_or(Value::Null);
+                #[cfg(not(cnote_shared_core))]
+                crate::trello::notifications::select_board(
+                    state["trelloBoard"].as_str().unwrap_or_default(),
+                );
                 self.emit(Event::ToolState { state });
             }
             "tool_save" => {
@@ -472,6 +476,10 @@ impl Engine {
                 let state = serde_json::to_string(&v["state"])?;
                 anyhow::ensure!(state.len() <= 20 * 1024 * 1024, "工具草稿超过 20 MB");
                 self.db.set_setting("tool_state", &state)?;
+                #[cfg(not(cnote_shared_core))]
+                crate::trello::notifications::select_board(
+                    v["state"]["trelloBoard"].as_str().unwrap_or_default(),
+                );
                 self.emit(Event::ToolSaved {
                     seq: v["seq"].as_u64().unwrap_or(0),
                 });
