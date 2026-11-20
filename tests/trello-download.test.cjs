@@ -44,3 +44,10 @@ test('storage permission denial stops the remaining downloads',async()=>{
  await p.control.onclick();assert.equal(p.calls.filter(m=>m.op==='download_homework_attachment').length,1);
  assert.match(p.status.textContent,/下载已停止/);assert.equal(p.control.disabled,false);
 });
+test('a later download fetches every attachment again under the same names',async()=>{
+ const p=await planner();await p.control.onclick();await p.control.onclick();
+ assert.equal(p.calls.filter(m=>m.op==='homework_attachments').length,2);
+ const files=p.calls.filter(m=>m.op==='download_homework_attachment');
+ assert.equal(files.length,4);
+ assert.deepEqual(files.slice(2).map(m=>[m.id,m.attachment,m.name]),files.slice(0,2).map(m=>[m.id,m.attachment,m.name]));
+});

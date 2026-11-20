@@ -2,7 +2,6 @@
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::{
-    fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -111,7 +110,7 @@ pub(super) fn plan(name: &str, date: &str, attachments: &Value) -> Result<Value>
     Ok(json!({"files":files}))
 }
 
-/// Atomically reserve a new name, never overwrite another download.
+/// Replace the named download atomically after the complete file is written.
 pub fn save_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf> {
     anyhow::ensure!(
         !name.is_empty()
@@ -121,39 +120,13 @@ pub fn save_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf> 
         "下载文件名无效"
     );
     std::fs::create_dir_all(directory).context("无法创建下载目录")?;
-    let base = Path::new(name);
-    let stem = base
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .context("下载文件名无效")?;
-    let extension = base
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default();
-    for suffix in 0..10_000 {
-        let leaf = if suffix == 0 {
-            name.to_owned()
-        } else if extension.is_empty() {
-            format!("{stem} ({suffix})")
-        } else {
-            format!("{stem} ({suffix}).{extension}")
-        };
-        let path = directory.join(leaf);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                let result = file.write_all(bytes).and_then(|_| file.sync_all());
-                if let Err(error) = result {
-                    drop(file);
-                    let _ = std::fs::remove_file(&path);
-                    return Err(error).context("附件保存失败，请检查下载目录权限和可用空间");
-                }
-                return Ok(path);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error).context("无法写入下载目录"),
-        }
-    }
-    anyhow::bail!("下载目录同名文件过多")
+    let path = directory.join(name);
+    let mut file = tempfile::NamedTempFile::new_in(directory).context("无法写入下载目录")?;
+    file.write_all(bytes)
+        .and_then(|_| file.as_file().sync_all())
+        .context("附件保存失败，请检查下载目录权限和可用空间")?;
+    file.persist(&path).context("无法覆盖下载文件")?;
+    Ok(path)
 }
 
 #[cfg(test)]
@@ -186,16 +159,21 @@ mod tests {
         assert!(name.len() < 240);
     }
     #[test]
-    fn downloads_do_not_overwrite_existing_files_or_escape_the_directory() {
+    fn repeated_downloads_replace_existing_files_without_duplicates_or_path_escape() {
         let dir = tempfile::tempdir().unwrap();
         let directory = dir.path().join("CNote");
         let first = save_file(&directory, "2026-11-18_语文_图一.jpg", b"original").unwrap();
-        let second = save_file(&directory, "2026-11-18_语文_图一.jpg", b"second").unwrap();
+        let second = save_file(&directory, "2026-11-18_语文_图一.jpg", b"new").unwrap();
         assert_eq!(first.parent(), Some(directory.as_path()));
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
-        assert_ne!(first, second);
-        assert_eq!(std::fs::read(first).unwrap(), b"original");
-        assert_eq!(std::fs::read(second).unwrap(), b"second");
+        assert_eq!(first, second);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        assert_eq!(std::fs::read(second).unwrap(), b"new");
+        let blocked = directory.join("blocked.jpg");
+        std::fs::create_dir(&blocked).unwrap();
+        assert!(save_file(&directory, "blocked.jpg", b"bad").is_err());
+        assert!(blocked.is_dir());
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
         assert!(save_file(&directory, "../escape.jpg", b"bad").is_err());
     }
 }
