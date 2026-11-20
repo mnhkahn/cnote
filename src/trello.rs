@@ -11,7 +11,11 @@ use base64::Engine;
 use reqwest::{StatusCode, blocking::Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{io::Read, sync::Mutex, time::Duration};
+use std::{
+    io::Read,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 static AUTH: Mutex<Session> = Mutex::new(Session {
     loaded: false,
@@ -86,6 +90,75 @@ const API: &str = "https://api.trello.com/1";
 struct Credentials {
     key: String,
     token: String,
+}
+// Shared by desktop and Android hosts; survives feature WebView recreation.
+// Kept in memory only, with credentials included in the identity to prevent
+// reuse after reauthorization or switching accounts.
+const LIST_CACHE_TTL: Duration = Duration::from_secs(300);
+static LIST_CACHE: Mutex<ListCache> = Mutex::new(ListCache {
+    entries: Vec::new(),
+});
+struct ListCache {
+    entries: Vec<(String, Credentials, String, Instant, Value)>,
+}
+impl ListCache {
+    fn read(&self, account: &str, auth: &Credentials, key: &str, now: Instant) -> Option<Value> {
+        self.entries
+            .iter()
+            .find(|(owner, credentials, id, at, _)| {
+                owner == account
+                    && credentials == auth
+                    && id == key
+                    && now.saturating_duration_since(*at) < LIST_CACHE_TTL
+            })
+            .map(|entry| entry.4.clone())
+    }
+    fn store(&mut self, account: &str, auth: &Credentials, key: &str, value: &Value) {
+        self.entries.retain(|(owner, credentials, id, at, _)| {
+            owner == account && credentials == auth && id != key && at.elapsed() < LIST_CACHE_TTL
+        });
+        if self.entries.len() >= 8 {
+            self.entries.remove(0);
+        }
+        self.entries.push((
+            account.into(),
+            auth.clone(),
+            key.into(),
+            Instant::now(),
+            value.clone(),
+        ));
+    }
+}
+fn cached_list(
+    v: &Value,
+    account: &str,
+    auth: &Credentials,
+    key: &str,
+    fetch: impl FnOnce() -> Result<Value>,
+) -> Result<Value> {
+    // Only the feature UI opts in; other clients keep their freshness contract.
+    let Some(reuse) = v["cache"].as_bool() else {
+        return fetch();
+    };
+    let mut cache = LIST_CACHE
+        .lock()
+        .map_err(|_| anyhow::anyhow!("作业缓存状态异常"))?;
+    if reuse && let Some(value) = cache.read(account, auth, key, Instant::now()) {
+        return Ok(value);
+    }
+    // A failed forced refresh must not leave a formerly fresh snapshot reusable.
+    cache.entries.retain(|entry| entry.2 != key);
+    let value = fetch()?;
+    cache.store(account, auth, key, &value);
+    Ok(value)
+}
+struct InvalidateListCache;
+impl Drop for InvalidateListCache {
+    fn drop(&mut self) {
+        if let Ok(mut cache) = LIST_CACHE.lock() {
+            cache.entries.clear();
+        }
+    }
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct AccountLink {
@@ -565,6 +638,19 @@ pub fn request(v: Value) -> Result<Value> {
             "微软账号已切换，请重试"
         );
     }
+    let _invalidate = matches!(
+        v["op"].as_str(),
+        Some(
+            "connect"
+                | "disconnect"
+                | "link_account"
+                | "link_board"
+                | "update_cell"
+                | "publish_homework"
+                | "review_homework"
+        )
+    )
+    .then(|| InvalidateListCache);
     match v["op"].as_str().unwrap_or_default() {
         "status" => {
             let auth = session.auth()?;
@@ -706,16 +792,21 @@ pub fn request(v: Value) -> Result<Value> {
         _ => bail!("未知的 Trello 操作"),
     }
     let api = Api::new(session.auth()?.ok_or(AuthRequired)?)?;
+    let account = session.account.clone();
     drop(session);
     match v["op"].as_str().unwrap_or_default() {
-        "boards" => Ok(
-            json!({"boards":api.get("/members/me/boards", &[("filter","open"),("fields","name,closed,url")])?}),
-        ),
+        "boards" => cached_list(&v, &account, &api.auth, "boards", || {
+            Ok(
+                json!({"boards":api.get("/members/me/boards", &[("filter","open"),("fields","name,closed,url")])?}),
+            )
+        }),
         "board" => {
             let id = identifier(&v)?;
-            Ok(
-                json!({"lists":api.get(&format!("/boards/{id}/lists"), &[("filter","open"),("fields","name,closed,pos")])?,"cards":api.get(&format!("/boards/{id}/cards"), &[("filter","open"),("fields","name,desc,due,dueComplete,idList,closed,url,labels,dateLastActivity,dateCompleted")])?}),
-            )
+            cached_list(&v, &account, &api.auth, id, || {
+                Ok(
+                    json!({"lists":api.get(&format!("/boards/{id}/lists"), &[("filter","open"),("fields","name,closed,pos")])?,"cards":api.get(&format!("/boards/{id}/cards"), &[("filter","open"),("fields","name,desc,due,dueComplete,idList,closed,url,labels,dateLastActivity,dateCompleted")])?}),
+                )
+            })
         }
         "update_cell" => {
             let id = identifier(&v)?;
@@ -817,6 +908,98 @@ pub fn request(v: Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn list_cache_reuses_only_fresh_matching_identity_and_refresh_can_bypass() {
+        let auth = Credentials {
+            key: "key".into(),
+            token: "token".into(),
+        };
+        let other = Credentials {
+            key: "key".into(),
+            token: "other".into(),
+        };
+        let mut cache = ListCache {
+            entries: Vec::new(),
+        };
+        let value = json!({"cards": []});
+        cache.store("account", &auth, "board", &value);
+        let at = cache.entries[0].3;
+        assert_eq!(
+            cache.read("account", &auth, "board", at),
+            Some(value.clone())
+        );
+        assert!(cache.read("other", &auth, "board", at).is_none());
+        assert!(cache.read("account", &other, "board", at).is_none());
+        assert!(cache.read("account", &auth, "other-board", at).is_none());
+        assert!(
+            cache
+                .read("account", &auth, "board", at + LIST_CACHE_TTL)
+                .is_none()
+        );
+        assert_eq!(
+            cached_list(
+                &json!({"cache": true}),
+                "account",
+                &auth,
+                "cache-test",
+                || Ok(value.clone())
+            )
+            .unwrap(),
+            value
+        );
+        assert_eq!(
+            cached_list(
+                &json!({"cache": true}),
+                "account",
+                &auth,
+                "cache-test",
+                || panic!("cache hit must not fetch")
+            )
+            .unwrap(),
+            value
+        );
+        let fresh = json!({"cards": [{"id": "new"}]});
+        assert_eq!(
+            cached_list(
+                &json!({"cache": false}),
+                "account",
+                &auth,
+                "cache-test",
+                || Ok(fresh.clone())
+            )
+            .unwrap(),
+            fresh
+        );
+        assert!(
+            cached_list(
+                &json!({"cache": false}),
+                "account",
+                &auth,
+                "cache-test",
+                || bail!("offline")
+            )
+            .is_err()
+        );
+        assert_eq!(
+            cached_list(
+                &json!({"cache": true}),
+                "account",
+                &auth,
+                "cache-test",
+                || Ok(value.clone())
+            )
+            .unwrap(),
+            value
+        );
+        drop(InvalidateListCache);
+        assert!(
+            LIST_CACHE
+                .lock()
+                .unwrap()
+                .read("account", &auth, "cache-test", Instant::now())
+                .is_none()
+        );
+    }
     #[test]
     fn microsoft_links_restore_their_own_credentials_and_hide_assigned_legacy_tokens() {
         let legacy = Credentials {
