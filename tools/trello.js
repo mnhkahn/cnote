@@ -43,6 +43,62 @@
  const AUTO_REFRESH_MS=300000;
  const dayKey=date=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
  const dueDay=card=>card.due&&Number.isFinite(new Date(card.due).getTime())?dayKey(new Date(card.due)):'';
+ const timestamp=value=>value==null||value===''?NaN:new Date(value).getTime();
+ const pad=value=>String(value).padStart(2,'0');
+ function localDateTime(value){
+  const time=timestamp(value);if(!Number.isFinite(time))return '';
+  const date=new Date(time);return `${dayKey(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+ }
+ const timeText=value=>localDateTime(value).replace('T',' ')||'—';
+ function descriptionParts(card){
+  const times={};
+  let text=String(card.desc||'').replace(/^<!-- cnote (dateCompleted|dateLastActivity)=([^\r\n]+) -->(?:\r?\n|$)/gm,(line,field,value)=>{
+   if(!Number.isFinite(timestamp(value)))return line;
+   times[field]=value;return '';
+  });
+  if(text.trimStart().startsWith('{')){
+   try{
+    const data=JSON.parse(text);let stripped=false;
+    for(const field of ['dateCompleted','dateLastActivity']){
+     const key='_cnote_'+field,value=data[key];if(typeof value!=='string'||!Number.isFinite(timestamp(value)))continue;
+     times[field]=value;delete data[key];stripped=true;
+    }
+    if(stripped)text=JSON.stringify(data,null,2);
+   }catch{}
+  }
+  return {text,times};
+ }
+ const description=card=>descriptionParts(card).text;
+ const timeOverride=(card,field)=>descriptionParts(card).times[field];
+ const cardTime=(card,field)=>['dateCompleted','dateLastActivity'].includes(field)?timeOverride(card,field)??card[field]:card[field];
+ const listName=card=>lists.find(list=>list.id===card.idList)?.name||'未知进度';
+ const submitted=card=>['已完成','已改错'].includes(listName(card).trim());
+ function startedAt(card){
+  const start=card.homeworkStarted,list=listName(card).trim();
+  if(!start||card.dueComplete||submitted(card)||start.correction!==(list==='待改错'))return 0;
+  return start.at*1000;
+ }
+ const progressLabel=card=>startedAt(card)?'已开始':listName(card);
+ const taskGroups=['正在做','还没做','做完'];
+ const taskGroup=card=>startedAt(card)?0:submitted(card)?2:1;
+ const plannedOrder=card=>Number.isFinite(timestamp(card.start))?timestamp(card.start):timestamp(card.due);
+ const grade=card=>description(card).match(/^[ \t]*打分结果[ \t]*[:：][ \t]*([^\r\n]*)/m)?.[1].trim()||'';
+ function homeworkType(card){
+  const desc=description(card);
+  try{const type=JSON.parse(desc)?.type;if(typeof type==='string')return type.trim();}catch{}
+  return desc.match(/^[ \t]*(?:作业类型|类型|type)[ \t]*[:：][ \t]*([^\r\n]*)/mi)?.[1].trim()||'';
+ }
+ const columns=[
+  {label:'作业类型',field:'homework_type',value:homeworkType,cls:'trello-homework-type',width:9},
+  {label:'进度',field:'progress',value:progressLabel,cls:'trello-progress',width:10},
+  {label:'打分结果',field:'grade',value:grade,cls:'trello-grade',width:7},
+  ...[
+   ['计划开始时间','start','trello-start-at'],
+   ['实际完成时间','dateCompleted','trello-completed-at'],
+   ['预计完成时间','due','trello-due-at'],
+   ['更新时间','dateLastActivity','trello-updated-at']
+  ].map(([label,field,cls])=>({label,field,cls,width:14,value:card=>timeText(cardTime(card,field)),date:true}))
+ ];
  function node(tag,text,cls){const el=document.createElement(tag);if(text!=null)el.textContent=text;if(cls)el.className=cls;return el;}
  function button(text,action,cls){const el=node('button',text,cls);el.type='button';el.onclick=action;return el;}
  function request(op,id,extra={},progress){return new Promise((resolve,reject)=>{const request=++serial;pending.set(request,{resolve,reject,progress});window.ipc.postMessage(JSON.stringify({type:microsoftAccount&&['status','link_status','link_account','link_board','disconnect'].includes(op)?'trello_connection':'trello',request,op,id,account_id:microsoftAccount,...extra}));});}
@@ -123,6 +179,7 @@
  document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else if(active&&loaded)resumeAutoRefresh();});
  function shift(days){selected.setDate(selected.getDate()+days);render();}
  function render(){
+  if(editingCell&&!editingCell.saving&&editingCell.table)editingCell.finish();
   updateHomeworkDownload();
   const first=new Date(selected);first.setDate(first.getDate()-(first.getDay()+6)%7);const last=new Date(first);last.setDate(last.getDate()+6);
   document.getElementById('trello-range').textContent=`${first.getFullYear()}年 ${first.getMonth()+1}月${first.getDate()}日 — ${last.getMonth()+1}月${last.getDate()}日`;
@@ -131,32 +188,28 @@
   if(!board)return;
   const content=document.getElementById('trello-content');content.replaceChildren();if(busy){content.append(node('p','正在加载看板…','trello-empty'));return;}
   const daily=cards.filter(c=>!c.closed&&dueDay(c)===dayKey(selected));
-  const listName=card=>lists.find(list=>list.id===card.idList)?.name||'未知进度';
-  const rank=card=>{const name=listName(card).trim();if(name==='待完成')return 0;if(name==='待改错')return 1;if(name==='已完成')return 3;if(name==='已改错')return 4;return card.dueComplete?3:2;};
-  const homeworkType=card=>String(card.desc||'').match(/^[ \t]*(?:作业)?类型[ \t]*[:：][ \t]*([^\r\n]*)/m)?.[1].trim()||'';
-  const grade=card=>String(card.desc||'').match(/^[ \t]*打分结果[ \t]*[:：][ \t]*([^\r\n]*)/m)?.[1].trim()||'';
-  const timestamp=value=>{const time=value?Date.parse(value):NaN;return Number.isFinite(time)?time:Number.MAX_SAFE_INTEGER;};
-  const completedAt=card=>timestamp(card.dateCompleted);
-  const timeText=value=>{value=timestamp(value);if(value===Number.MAX_SAFE_INTEGER)return '—';const date=new Date(value);return `${dayKey(date)} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;};
   const table=node('table',null,'trello-table');table.setAttribute('aria-label','当天 Trello 任务');
-  const columns=[
-   daily.some(card=>homeworkType(card))&&{label:'作业类型',value:homeworkType,cls:'trello-homework-type',width:10},
-   {label:'进度',value:listName,cls:'trello-progress',width:8},
-   {label:'打分结果',value:grade,cls:'trello-grade',width:7},
-   {label:'实际完成时间',value:card=>timeText(card.dateCompleted),cls:'trello-completed-at',width:17},
-   {label:'预计完成时间',value:card=>timeText(card.due),cls:'trello-due-at',width:17},
-   {label:'更新时间',value:card=>timeText(card.dateLastActivity),cls:'trello-updated-at',width:17}
-  ].filter(Boolean);
   const head=node('thead'),heading=node('tr');for(const column of [{label:'标题',width:100-columns.reduce((sum,column)=>sum+column.width,0)},...columns]){const cell=node('th',column.label);cell.scope='col';cell.style.width=column.width+'%';heading.append(cell);}head.append(heading);table.append(head);
-  const body=node('tbody');for(const card of daily.sort((a,b)=>rank(a)-rank(b)||listName(a).localeCompare(listName(b),'zh-CN')||completedAt(a)-completedAt(b)||timestamp(a.due)-timestamp(b.due))){
-   const row=node('tr',null,'trello-task');row.dataset.completed=String(rank(card)>=3);
+  const body=node('tbody');let previousGroup=-1;
+  for(const card of daily.sort((a,b)=>taskGroup(a)-taskGroup(b)||plannedOrder(a)-plannedOrder(b)||timestamp(a.due)-timestamp(b.due))){
+   const group=taskGroup(card);
+   if(group!==previousGroup){
+    const header=node('tr',null,'trello-task-group'),label=node('td',taskGroups[group]);label.colSpan=columns.length+1;
+    header.append(label);body.append(header);previousGroup=group;
+   }
+   const row=node('tr',null,'trello-task');row.dataset.completed=String(group===2);
    const titleCell=node('td');titleCell.append(button(card.name,()=>showDetail(card),'trello-open-card'));
    row.append(titleCell);for(const column of columns){
     const cell=node('td',column.value(card)||'—',column.cls);row.append(cell);
-    if(!readOnly()&&(column.cls==='trello-progress'||column.cls==='trello-grade')){
+    const start=column.field==='progress'&&startedAt(card);
+    if(start){
+     const time=node('time',timeText(start).slice(5),'trello-started-time');time.dateTime=new Date(start).toISOString();
+     time.title='实际开始时间 '+timeText(start);cell.append(time);
+    }
+    if(!readOnly()){
      cell.classList.add('trello-editable');cell.tabIndex=0;cell.title='双击修改';
-     const edit=()=>editCell(cell,card,column.cls==='trello-progress'?'progress':'grade',column.value(card));
-     cell.onclick=event=>event.stopPropagation();cell.ondblclick=event=>{event.stopPropagation();edit();};
+     const edit=()=>editCell(cell,card,column);
+     cell.onclick=event=>{event.stopPropagation();if(window.cnotePlatform?.mobile)edit();};cell.ondblclick=event=>{event.stopPropagation();edit();};
      cell.onkeydown=event=>{if(event.target===cell&&(event.key==='Enter'||event.key==='F2')){event.preventDefault();edit();}};
     }
    }
@@ -166,38 +219,67 @@
   table.append(body);content.append(table);if(!daily.length)message('当天没有到期卡片，可选择其他日期。');else message('');
 
  }
- function editCell(cell,card,field,display){
+ function editCell(cell,card,column,onUpdate,feedback=message){
   if(editingCell||busy)return;
-  const menu=node('div',null,'trello-cell-options');menu.setAttribute('role','listbox');menu.setAttribute('aria-label',field==='progress'?'修改进度':'修改打分结果');
-  const current=field==='progress'?card.idList:display;
-  const options=field==='progress'?lists.filter(list=>!list.closed).map(list=>[list.id,list.name]):[['','未评分'],...['100','优','良','中','差'].map(value=>[value,value])];
-  if(current&&!options.some(([value])=>value===current))options.unshift([current,display]);
-  const edit={saving:false},epoch=boardEpoch;editingCell=edit;stopAutoRefresh();cell.replaceChildren(node('span',display||'—'),menu);
-  const outside=event=>{if(!edit.saving&&!menu.contains(event.target))finish();};
-  const finish=()=>{if(editingCell!==edit)return;document.removeEventListener('pointerdown',outside,true);editingCell=null;scheduleAutoRefresh();if(cell.isConnected)cell.textContent=display||'—';};
+  const {field,label,date}=column,display=column.value(card)||'—';
+  const isDescription=field==='desc';
+  const overrideTime=date&&['dateCompleted','dateLastActivity'].includes(field);
+  const options=field==='progress'?lists.filter(list=>!list.closed).map(list=>[list.id,list.name]):field==='grade'?[['','未评分'],...['100','优','良','中','差'].map(value=>[value,value])]:field==='dueComplete'?[['true','已标记完成'],['false','未标记完成']]:null;
+  const current=field==='progress'?card.idList:field==='dueComplete'?String(!!card.dueComplete):isDescription?description(card).replace(/\r\n/g,'\n'):date?localDateTime(cardTime(card,field)):column.value(card);
+  if(options&&current&&!options.some(([value])=>value===current))options.unshift([current,display]);
+  const menu=node(options?'div':'form',null,options?'trello-cell-options':'trello-cell-form');
+  if(options)menu.setAttribute('role','listbox');
+  menu.setAttribute('aria-label','修改'+label);
+  const edit={saving:false,table:!!cell.closest('table')},epoch=boardEpoch;editingCell=edit;stopAutoRefresh();cell.append(menu);
+  const outside=event=>{if(!isDescription&&!edit.saving&&!menu.contains(event.target))finish();};
+  const finish=()=>{if(editingCell!==edit)return;document.removeEventListener('pointerdown',outside,true);editingCell=null;menu.remove();scheduleAutoRefresh();};
+  edit.finish=finish;
   document.addEventListener('pointerdown',outside,true);
-  const save=async(value)=>{
+  const save=async(draft)=>{
    if(edit.saving||editingCell!==edit)return;
-   if(value===current){finish();cell.focus();return;}
-   edit.saving=true;menu.setAttribute('aria-busy','true');menu.querySelectorAll('button').forEach(option=>option.disabled=true);message('正在保存…');
+   const clearingOverride=overrideTime&&!draft&&timeOverride(card,field);
+   if(draft===current&&!clearingOverride){finish();cell.focus();return;}
+   const value=date&&draft?new Date(draft).toISOString():draft;
+   const controls=[...menu.querySelectorAll('button,input,textarea')];
+   edit.saving=true;menu.setAttribute('aria-busy','true');controls.forEach(control=>control.disabled=true);feedback('正在保存…');
    try{
-    const data=await request('update_cell',card.id,{field,value});
-    finish();if(epoch===boardEpoch){Object.assign(card,data.card);render();message('已保存到 Trello');}
-   }catch(error){finish();if(epoch===boardEpoch)message('保存失败：'+error.message,true);}
+    const data=await request('update_cell',card.id,{field,value,...(isDescription?{previous:current}:{})});
+    finish();if(epoch===boardEpoch){Object.assign(card,data.card);const row=cards.find(item=>item.id===card.id);if(row)Object.assign(row,data.card);render();onUpdate?.();feedback('已保存到 Trello');}
+   }catch(error){
+    if(options||!cell.isConnected){finish();}
+    else{edit.saving=false;menu.removeAttribute('aria-busy');controls.forEach(control=>control.disabled=false);}
+    if(epoch===boardEpoch)feedback('保存失败：'+error.message,true);
+   }
   };
+  menu.onkeydown=event=>{
+   event.stopPropagation();
+   if(event.key==='Escape'){event.preventDefault();if(!edit.saving){finish();cell.focus();}return;}
+   if(edit.saving||!options)return;
+   const choices=[...menu.querySelectorAll('button')],index=choices.indexOf(document.activeElement);
+   const next=event.key==='ArrowDown'?(index+1)%choices.length:event.key==='ArrowUp'?(index-1+choices.length)%choices.length:event.key==='Home'?0:event.key==='End'?choices.length-1:null;
+   if(next!==null){event.preventDefault();choices[next]?.focus();}
+  };
+  if(!options){
+   const input=node(isDescription?'textarea':'input');input.setAttribute('aria-label',label);
+   if(date){input.type='datetime-local';input.required=field==='due';}
+   input.value=current;
+   const submit=button('保存');submit.type='submit';
+   const actions=node('div',null,'trello-editor-actions');
+   actions.append(submit,button('取消',()=>{finish();cell.focus();}));
+   if(field==='start'&&current)actions.append(button('清除',()=>save('')));
+   if(overrideTime&&timeOverride(card,field))actions.append(button('恢复 Trello 时间',()=>save('')));
+   menu.append(input,actions);
+   menu.onsubmit=event=>{event.preventDefault();const draft=isDescription?input.value:input.value.trim();
+    if(date&&draft&&localDateTime(new Date(draft).getTime())!==draft){feedback('请输入有效的日期和时间',true);return;}
+    save(draft);
+   };
+   input.focus();return;
+  }
   for(const [value,label] of options){
    const option=button(label,()=>save(value));option.setAttribute('role','option');option.setAttribute('aria-selected',String(value===current));menu.append(option);
    option.onmousedown=event=>{if(event.button===0)event.preventDefault();};
   }
   menu.onfocusout=event=>{if(!edit.saving&&!menu.contains(event.relatedTarget))finish();};
-  menu.onkeydown=event=>{
-   event.stopPropagation();
-   if(edit.saving)return;
-   if(event.key==='Escape'){event.preventDefault();finish();cell.focus();return;}
-   const choices=[...menu.querySelectorAll('button')],index=choices.indexOf(document.activeElement);
-   const next=event.key==='ArrowDown'?(index+1)%choices.length:event.key==='ArrowUp'?(index-1+choices.length)%choices.length:event.key==='Home'?0:event.key==='End'?choices.length-1:null;
-   if(next!==null){event.preventDefault();choices[next]?.focus();}
-  };
   (menu.querySelector('[aria-selected=true]')||menu.firstElementChild)?.focus();
  }
  async function loadBoards(force=false){const epoch=++boardEpoch;busy=true;message('正在检测 Trello…');try{const data=await request('boards',undefined,{cache:!force});if(epoch!==boardEpoch)return;boards=(data.boards||[]).filter(b=>!b.closed);const select=document.getElementById('trello-board');select.replaceChildren(new Option('选择看板…',''));boards.forEach(b=>select.add(new Option(b.name,b.id)));if(!boards.some(b=>b.id===board)){board='';window.cnoteTools.setTrelloBoard('');}select.value=board;message('');if(board){await loadBoard(false,force);return;}busy=false;guide(boards.length?'请选择右上方的 Trello 看板。':'当前账号没有可用看板，请先在 Trello 创建看板。');}catch(error){if(epoch!==boardEpoch)return;busy=false;failure(error,()=>loadBoards(force));}}
@@ -237,6 +319,7 @@
   finally{downloadingHomework=false;updateHomeworkDownload();}
  }
  function removeDetail(){
+  if(editingCell&&!editingCell.table&&!editingCell.saving)editingCell.finish();
   closeImageViewer();originalImages.clear();originalData.clear();
   const detail=document.getElementById('trello-detail');
   detail?.querySelectorAll('audio,video').forEach(media=>media.pause());
@@ -411,7 +494,7 @@
  }
  const homeworkResults=new Map();
  function homeworkFields(card){
-  const desc=String(card.desc||'');let meta={};try{const parsed=JSON.parse(desc);if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))meta=parsed;}catch{}
+  const desc=description(card);let meta={};try{const parsed=JSON.parse(desc);if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))meta=parsed;}catch{}
   const line=names=>desc.match(new RegExp('^[ \\t]*(?:'+names+')[ \\t]*[:：][ \\t]*([^\\r\\n]*)','mi'))?.[1].trim()||'';
   const type=meta.type||line('作业类型|类型|type'),title=card.name||'';
   const kind=/口算/.test(title)||/^(口算|arithmetic)$/i.test(type)?'arithmetic':/^(阅读英语|english_reading|reading)$/.test(type)||(/英语|英文/.test(title)&&/阅读|朗读/.test(title))||!!meta.reading_text||/^[ \t]*(?:英语|英文)原文[ \t]*[:：]/m.test(desc)?'reading':/^(背单词|word_memorization|dictation)$/.test(type)||/单词听写|英语.*听写|听写.*英语|背单词/.test(title)?'dictation':'';
@@ -505,7 +588,7 @@
   display(initial);
   return reload;
  }
- function renderHomework(body,card,attachments,epoch,saved,refreshReviews){
+ function renderHomework(container,card,attachments,epoch,saved,refreshReviews,applyCard){
   const fields=homeworkFields(card);if(!fields.kind)return;
   const section=node('section',null,'trello-homework-review'),status=node('p'),actions=node('div',null,'trello-homework-actions');status.setAttribute('role','status');
   const reading=fields.kind==='reading';
@@ -524,15 +607,14 @@
    catch(error){if(epoch===detailEpoch)status.textContent='阅卷失败：'+error.message;}
    finally{reviewing=false;sync();}
   },'primary');
-  section.append(node('h3','自动阅卷'),submit,status,actions);body.append(section);
+  section.append(node('h3','自动阅卷'),submit,status,actions);container.append(section);
   const sync=()=>{submit.disabled=publicationPending||reviewing||loading||!!missing();};
   const cacheKey=()=>JSON.stringify([card.id,fields.kind,group.map(a=>a.id),reading?fields.reference:fields.kind==='dictation'?fields.words:String(fields.count)]);
   const applyPublication=data=>{
    if(!data.card)return;
    Object.assign(card,data.card);const index=cards.findIndex(c=>c.id===card.id);if(index>=0)cards[index]={...cards[index],...data.card};
    if(!lists.some(l=>l.id===card.idList))lists.push({id:card.idList,name:data.report?.grade==='100'?'已完成':'待改错'});
-   render();body.querySelector('.trello-description').textContent=card.desc||'暂无描述';
-   body.querySelector('.trello-card-status').textContent=`${lists.find(l=>l.id===card.idList)?.name||'未知进度'} · ${card.dueComplete?'已标记完成':'未标记完成'}`;
+   render();applyCard();
   };
   const display=(data,apply=false)=>{
    actions.replaceChildren();publicationPending=data.published===false;sync();
@@ -556,6 +638,40 @@
    }).catch(()=>{if(epoch===detailEpoch){loading=false;sync();if(!saved&&!cached&&!reviewing)status.textContent='课文读取失败，请稍后重新打开卡片。';}});
   }
  }
+ function detailFields(full,body,onDescriptionChanged){
+  const fields=node('div',null,'trello-detail-fields'),section=node('section',null,'trello-detail-description');
+  const status=node('p',null,'trello-card-status'),feedback=node('p',null,'trello-edit-feedback');feedback.setAttribute('role','status');
+  const report=(text,error=false)=>{feedback.textContent=text;feedback.dataset.error=String(error);message(text,error);};
+  const renderFields=()=>{
+   const start=startedAt(full);
+   status.textContent=`${progressLabel(full)} · ${start?'实际开始 '+timeText(start):full.dueComplete?'已标记完成':'未标记完成'}`;
+   fields.replaceChildren();
+   const completed={label:'完成标记',field:'dueComplete',value:card=>card.dueComplete?'已标记完成':'未标记完成'};
+   for(const column of [...columns,completed]){
+    const field=node('div',null,'trello-detail-field');
+    const value=column.value(full)||'—';
+    field.append(node('span',column.label));
+    if(readOnly())field.append(node('span',value));
+    else{
+     const control=button(value,()=>editCell(field,full,column,()=>{
+      renderFields();if(column.field==='homework_type')onDescriptionChanged();if(column.field==='grade'||column.field==='homework_type')renderDescription();
+     },report),'trello-detail-value');
+     control.setAttribute('aria-label','编辑'+column.label);field.append(control);
+    }
+    fields.append(field);
+   }
+  };
+  const renderDescription=()=>{
+   const heading=node('div',null,'trello-description-heading');heading.append(node('h3','描述'));
+   const column={label:'描述',field:'desc',value:description};
+   if(!readOnly())heading.append(button('编辑描述',()=>editCell(section,full,column,()=>{
+    renderFields();renderDescription();onDescriptionChanged();
+   },report)));
+   section.replaceChildren(heading,linkedText('div',description(full)||'暂无描述','trello-description'));
+  };
+  renderFields();renderDescription();body.append(status,fields,feedback,section);
+  return ()=>{renderFields();if(!section.querySelector('form'))renderDescription();};
+ }
  async function showDetail(card){const epoch=++detailEpoch;removeDetail();const dialog=node('dialog',null,'trello-detail');dialog.id='trello-detail';const close=()=>{detailEpoch++;dialog.close();removeDetail();};const header=node('div',null,'trello-detail-header');header.append(node('h2',card.name),button('关闭',close));const body=node('div','正在读取完整信息…','trello-detail-body');dialog.append(header,body);root.append(dialog);dialog.addEventListener('cancel',event=>{event.preventDefault();close();});
   const outside=event=>{const bounds=dialog.getBoundingClientRect();return event.target===dialog&&(event.clientX<bounds.left||event.clientX>bounds.right||event.clientY<bounds.top||event.clientY>bounds.bottom);};
   let backdropPressed=false;
@@ -563,12 +679,17 @@
   dialog.addEventListener('pointercancel',()=>{backdropPressed=false;});
   dialog.addEventListener('click',event=>{const dismiss=backdropPressed&&outside(event);backdropPressed=false;if(dismiss)close();});
   dialog.showModal();
-  try{const data=await request('card',card.id);if(epoch!==detailEpoch)return;const full=data.card;body.replaceChildren();body.append(node('p',`${lists.find(l=>l.id===full.idList)?.name||'未知进度'} · ${full.dueComplete?'已标记完成':'未标记完成'}`,'trello-card-status'),node('p',full.due?`截止：${new Date(full.due).toLocaleString()}`:'无截止日期'),node('h3','描述'),linkedText('div',full.desc||'暂无描述','trello-description'));
+  try{const data=await request('card',card.id);if(epoch!==detailEpoch)return;const full={...card,...data.card},reviewContainer=node('div');
+   body.replaceChildren();const applyCard=detailFields(full,body,()=>renderReview());
    if(full.labels?.length)body.append(node('p','标签：'+full.labels.map(l=>l.name||l.color).join('、')));
    if(full.members?.length)body.append(node('p','成员：'+full.members.map(m=>m.fullName||m.username).join('、')));
    for(const checklist of full.checklists||[]){body.append(node('h3',checklist.name));for(const item of checklist.checkItems||[])body.append(linkedText('p',(item.state==='complete'?'☑ ':'☐ ')+item.name));}
    const refreshReviews=renderHomeworkReviews(body,full,epoch,data);
-   if(!readOnly())renderHomework(body,full,data.attachments||[],epoch,data.homework_review,refreshReviews);
+   const renderReview=(saved)=>{
+    reviewContainer.replaceChildren();
+    if(!readOnly())renderHomework(reviewContainer,full,data.attachments||[],epoch,saved,refreshReviews,applyCard);
+   };
+   body.append(reviewContainer);renderReview(data.homework_review);
    body.append(node('h3','附件'));
    if(readOnly()&&data.attachments?.length){
     const names=node('ul');
@@ -588,5 +709,5 @@
    if(data.partial)body.append(node('p','部分信息加载失败，请关闭后重试，或打开 Trello 查看。'));if(!readOnly()||!data.attachments?.length)body.append(button(readOnly()?'在 Trello 打开':'在 Trello 查看完整卡片',()=>openLink(full.url||card.url),'primary'));
   }catch(error){if(epoch===detailEpoch){body.replaceChildren(node('p',error.message),button('重试',()=>showDetail(card)),button('在 Trello 打开',()=>openLink(card.url)));}}
  }
- window.cnoteTrello={receive,refresh,account,hide(){active=false;stopAutoRefresh();detailEpoch++;removeDetail();},show(){active=true;if(loaded){resumeAutoRefresh();return;}loaded=true;board=window.cnoteTools.state.trelloBoard||'';shell();render();restore();}};
+ window.cnoteTrello={receive,refresh,account,hide(){active=false;if(editingCell&&!editingCell.saving)editingCell.finish();stopAutoRefresh();detailEpoch++;removeDetail();},show(){active=true;if(loaded){resumeAutoRefresh();return;}loaded=true;board=window.cnoteTools.state.trelloBoard||'';shell();render();restore();}};
 })();

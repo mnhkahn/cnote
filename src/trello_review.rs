@@ -15,12 +15,12 @@ struct Review {
     list_attempted: bool,
     done: bool,
 }
-struct Store {
+pub(super) struct Store {
     path: PathBuf,
     _lock: File,
 }
 impl Store {
-    fn open(card: &str) -> Result<Self> {
+    pub(super) fn open(card: &str) -> Result<Self> {
         identifier(&json!({"id":card}))?;
         #[cfg(cnote_shared_core)]
         let dir = crate::platform::data()?.join("homework-reviews");
@@ -39,7 +39,7 @@ impl Store {
         }
         let lock = options.open(dir.join(format!("{card}.lock")))?;
         lock.try_lock()
-            .context("此卡片正在阅卷或提交，请稍后重试")?;
+            .context("此卡片正在保存或阅卷，请稍后重试")?;
         Ok(Self {
             path: dir.join(format!("{card}.json")),
             _lock: lock,

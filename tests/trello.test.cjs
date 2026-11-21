@@ -10,7 +10,8 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  window.messages=[];window.failImageOnce=true;window.revoked=[];window.nativeRevoke=window.nativeRevoke||URL.revokeObjectURL.bind(URL);URL.revokeObjectURL=url=>{revoked.push(url);nativeRevoke(url);};window.failBoards=false;window.boardFailureCode='auth_required';window.ipc={postMessage(raw){const m=JSON.parse(raw);messages.push(m);if(m.type==='workspace')cnoteTools.show(m.index);if(m.type==='refresh_workspace'){if(cnoteTools.workspace===4)cnoteTrello.refresh();else cnote.action('refresh');}if(m.type==='tool_ready')setTimeout(()=>cnoteTools.receive({type:'tool_state',state:{}}),0);if(m.type==='tool_save')setTimeout(()=>cnoteTools.receive({type:'tool_saved',seq:m.seq}),0);if(m.type==='trello')setTimeout(()=>{
  if(m.op==='update_cell'){
  if(window.failUpdate){cnoteTrello.receive({request:m.request,error:'没有权限修改，请重新授权读写权限'});return;}
- cnoteTrello.receive({request:m.request,data:{card:m.field==='progress'?{id:m.id,idList:m.value,dueComplete:m.value==='done'}:{id:m.id,desc:m.value?'打分结果：'+m.value:''}}});return;}
+ const updates={progress:{idList:m.value,dueComplete:m.value==='done'},grade:{desc:m.value?'打分结果：'+m.value:''},homework_type:{desc:'作业类型：'+m.value},desc:{desc:m.value},start:{start:m.value||null},due:{due:m.value},dateCompleted:{desc:'<!-- cnote dateCompleted='+m.value+' -->\\n作业类型：阅读英语'},dateLastActivity:{desc:'<!-- cnote dateLastActivity='+m.value+' -->\\n作业类型：阅读英语'}};
+ cnoteTrello.receive({request:m.request,data:{card:{id:m.id,...updates[m.field]}}});return;}
  if(m.op==='copy_image'){cnoteTrello.receive({request:m.request,data:{copied:true}});return;}
  if(m.op==='share_image'){cnoteTrello.receive({request:m.request,data:{shared:!!m.image}});return;}
  if(m.op==='transcribe_audio'){window.pendingASR=m.request;return;}
@@ -19,11 +20,11 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  if(m.attachment==='image'&&failImageOnce){failImageOnce=false;cnoteTrello.receive({request:m.request,error:'模拟附件加载失败'});return;}
  const data=m.attachment==='image'?{mime:'image/png',base64:'${png}'}:m.attachment==='audio'?{mime:'audio/wav',base64:'${wav.toString('base64')}'}:{mime:'text/plain',base64:'${Buffer.from('附件正文 <img src=x onerror=alert(1)>').toString('base64')}'};cnoteTrello.receive({request:m.request,data});return;}
  const card={id:'card',name:'练习 <img src=x>',desc:'类型：普通作业\\n完整描述\\n作业：[打开练习](https://example.com/practice?a=1&b=2)\\n参考：https://example.org/page_(one)。\\n<https://example.net/help>\\n[危险链接](javascript:alert(1))',idList:'todo',due:'2026-10-31T16:30:00Z',dueComplete:false,url:'https://trello.com/c/example',members:[{fullName:'成员甲'}],checklists:[{name:'练习步骤',checkItems:[{name:'第一步 https://example.net/step',state:'complete'}]}]};
- const data=m.op==='status'?{connected:true,key:'a'.repeat(32)}:m.op==='authorize'?{url:'https://trello.com/1/authorize?scope=read,write'}:m.op==='connect'?{connected:true}:m.op==='disconnect'?{connected:false}:m.op==='boards'?{boards:[{id:'board',name:'学习看板'}]}:m.op==='board'?{lists:[{id:'todo',name:'待完成'},{id:'done',name:'已完成'}],cards:window.testCards||[{...card,id:'donecard',idList:'done',name:'已完成任务',dateCompleted:'2026-11-01T03:00:00Z',dateLastActivity:'2026-11-01T03:00:00Z',desc:'打分结果：暂评·良\\n其他说明',dueComplete:false},{...card,id:'missingtime',idList:'done',name:'无完成记录任务',desc:''},{...card,id:'earlydone',idList:'done',name:'早完成任务',dateCompleted:'2026-11-01T01:00:00Z',dateLastActivity:'2026-11-01T05:00:00Z',desc:'打分结果：100\\n作业类型：口算'},card,{...card,id:'past',name:'昨天任务',due:'2026-10-31T02:00:00Z'},{...card,id:'none',due:null},{...card,id:'closed',closed:true}]}:{card,attachments:[{id:'image',name:'附件图片',mimeType:'image/png',isUpload:true,date:'2026-11-01T01:00:00Z',url:'https://trello.com/file'},{id:'audio',name:'音频作业',mimeType:'audio/wav',isUpload:true,date:'2026-11-01T03:00:00Z',url:'https://trello.com/audio'},{id:'text',name:'文字附件',mimeType:'text/plain',isUpload:true,date:'2026-11-01T02:00:00Z',url:'https://trello.com/text'}],actions:[{type:'commentCard',date:'2026-11-01T01:00:00Z',memberCreator:{fullName:'作者'},data:{text:'完整评论 <img src=x onerror=alert(1)> [反馈](https://example.net/feedback)'}}]};cnoteTrello.receive({request:m.request,...(failBoards&&m.op==='boards'?{error:boardFailureCode==='auth_required'?'请先授权 Trello':'网络暂时不可用',code:boardFailureCode}:{data})});},5);}};
+ const data=m.op==='status'?{connected:true,key:'a'.repeat(32)}:m.op==='authorize'?{url:'https://trello.com/1/authorize?scope=read,write'}:m.op==='connect'?{connected:true}:m.op==='disconnect'?{connected:false}:m.op==='boards'?{boards:[{id:'board',name:'学习看板'}]}:m.op==='board'?{lists:window.testLists||[{id:'todo',name:'待完成'},{id:'done',name:'已完成'}],cards:window.testCards||[{...card,id:'donecard',idList:'done',name:'已完成任务',start:'2026-10-31T16:20:00Z',dateCompleted:'2026-11-01T03:00:00Z',dateLastActivity:'2026-11-01T03:00:00Z',desc:'打分结果：暂评·良\\n其他说明',dueComplete:false},{...card,id:'missingtime',idList:'done',name:'无完成记录任务',desc:''},{...card,id:'earlydone',idList:'done',name:'早完成任务',start:'2026-10-31T16:15:00Z',dateCompleted:'2026-11-01T01:00:00Z',dateLastActivity:'2026-11-01T05:00:00Z',desc:'打分结果：100\\n作业类型：口算'},card,{...card,id:'past',name:'昨天任务',due:'2026-10-31T02:00:00Z'},{...card,id:'none',due:null},{...card,id:'closed',closed:true}]}:{card:window.testCards?.find(item=>item.id===m.id)||card,attachments:[{id:'image',name:'附件图片',mimeType:'image/png',isUpload:true,date:'2026-11-01T01:00:00Z',url:'https://trello.com/file'},{id:'audio',name:'音频作业',mimeType:'audio/wav',isUpload:true,date:'2026-11-01T03:00:00Z',url:'https://trello.com/audio'},{id:'text',name:'文字附件',mimeType:'text/plain',isUpload:true,date:'2026-11-01T02:00:00Z',url:'https://trello.com/text'}],actions:[{type:'commentCard',date:'2026-11-01T01:00:00Z',memberCreator:{fullName:'作者'},data:{text:'完整评论 <img src=x onerror=alert(1)> [反馈](https://example.net/feedback)'}}]};cnoteTrello.receive({request:m.request,...(failBoards&&m.op==='boards'?{error:boardFailureCode==='auth_required'?'请先授权 Trello':'网络暂时不可用',code:boardFailureCode}:{data})});},5);}};
  </script>`+html;await page.setContent(fixture);
  await page.keyboard.press('Meta+5');await page.waitForSelector('#trello-board option[value="board"]',{state:'attached'});
  assert.equal(await page.locator('.trello-day[aria-pressed=true]').getAttribute('aria-label'),'2026-11-01');assert.equal(await page.locator('.trello-day').first().getAttribute('aria-label'),'2026-10-26');
- await page.selectOption('#trello-board','board');await page.waitForSelector('.trello-task');assert.equal(await page.locator('.trello-task').count(),4);assert.equal(await page.locator('.trello-table').count(),1);assert.deepEqual(await page.locator('.trello-table th').allTextContents(),['标题','作业类型','进度','打分结果','实际完成时间','预计完成时间','更新时间']);assert.deepEqual(await page.locator('.trello-task .trello-progress').allTextContents(),['待完成','已完成','已完成','已完成']);assert.deepEqual(await page.locator('.trello-task .trello-grade').allTextContents(),['—','100','暂评·良','—']);assert.deepEqual(await page.locator('.trello-homework-type').allTextContents(),['普通作业','口算','—','—']);assert.equal(await page.locator('.trello-task img').count(),0);assert.deepEqual(await page.locator('.trello-open-card').allTextContents(),['练习 <img src=x>','早完成任务','已完成任务','无完成记录任务']);assert.deepEqual(await page.locator('.trello-completed-at').allTextContents(),['—','2026-11-01 09:00','2026-11-01 11:00','—']);assert.deepEqual(await page.locator('.trello-updated-at').allTextContents(),['—','2026-11-01 13:00','2026-11-01 11:00','—']);
+ await page.selectOption('#trello-board','board');await page.waitForSelector('.trello-task');assert.equal(await page.locator('.trello-task').count(),4);assert.equal(await page.locator('.trello-table').count(),1);assert.deepEqual(await page.locator('.trello-table th').allTextContents(),['标题','作业类型','进度','打分结果','计划开始时间','实际完成时间','预计完成时间','更新时间']);assert.deepEqual(await page.locator('.trello-task .trello-progress').allTextContents(),['待完成','已完成','已完成','已完成']);assert.deepEqual(await page.locator('.trello-task .trello-grade').allTextContents(),['—','100','暂评·良','—']);assert.deepEqual(await page.locator('.trello-homework-type').allTextContents(),['普通作业','口算','—','—']);assert.equal(await page.locator('.trello-task img').count(),0);assert.deepEqual(await page.locator('.trello-open-card').allTextContents(),['练习 <img src=x>','早完成任务','已完成任务','无完成记录任务']);assert.deepEqual(await page.locator('.trello-completed-at').allTextContents(),['—','2026-11-01 09:00','2026-11-01 11:00','—']);assert.deepEqual(await page.locator('.trello-updated-at').allTextContents(),['—','2026-11-01 13:00','2026-11-01 11:00','—']);
  const editableRow=()=>page.locator('.trello-task').filter({has:page.getByRole('button',{name:'练习 <img src=x>',exact:true})});
  await editableRow().locator('.trello-progress').dblclick();
  assert(await page.getByRole('listbox',{name:'修改进度'}).isVisible(),'double-click opens the options immediately');
@@ -58,6 +59,51 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  await page.evaluate(()=>window.failUpdate=false);await editableRow().locator('.trello-grade').dblclick();
  await page.getByRole('option',{name:'未评分',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('.trello-cell-options'));
  assert.equal(await editableRow().locator('.trello-grade').textContent(),'—');
+ const saveField=async(cls,label,value)=>{
+  await editableRow().locator(cls).dblclick();
+  const form=page.getByRole('form',{name:'修改'+label,exact:true});
+  await form.getByLabel(label,{exact:true}).fill(value);
+  await form.getByRole('button',{name:'保存',exact:true}).click();
+  await form.waitFor({state:'detached'});
+ };
+ assert.equal(await editableRow().locator('td.trello-editable').count(),7);
+ await saveField('.trello-homework-type','作业类型','阅读英语');
+ assert.equal(await editableRow().locator('.trello-homework-type').textContent(),'阅读英语');
+ await saveField('.trello-start-at','计划开始时间','2026-11-01T08:45');
+ assert.equal(await editableRow().locator('.trello-start-at').textContent(),'2026-11-01 08:45');
+ assert.deepEqual(await page.evaluate(()=>{const {field,value}=messages.filter(m=>m.op==='update_cell').at(-1);return {field,value};}),{field:'start',value:'2026-11-01T00:45:00.000Z'});
+ await editableRow().locator('.trello-start-at').dblclick();
+ await page.getByRole('form',{name:'修改计划开始时间',exact:true}).getByRole('button',{name:'清除',exact:true}).click();
+ await page.getByRole('form',{name:'修改计划开始时间',exact:true}).waitFor({state:'detached'});
+ assert.equal(await editableRow().locator('.trello-start-at').textContent(),'—');
+ await saveField('.trello-completed-at','实际完成时间','2026-11-01T09:45');
+ assert.equal(await editableRow().locator('.trello-completed-at').textContent(),'2026-11-01 09:45');
+ await saveField('.trello-updated-at','更新时间','2026-11-01T10:10');
+ assert.equal(await editableRow().locator('.trello-updated-at').textContent(),'2026-11-01 10:10');
+ await saveField('.trello-due-at','预计完成时间','2026-11-02T08:00');
+ assert.equal(await editableRow().count(),0);
+ await page.getByRole('button',{name:'下一周',exact:true}).click();
+ await page.locator('[aria-label="2026-11-02"]').click();
+ assert.equal(await editableRow().locator('.trello-due-at').textContent(),'2026-11-02 08:00');
+ await saveField('.trello-due-at','预计完成时间','2026-11-01T08:30');
+ await page.locator('#trello-today').click();
+ await editableRow().locator('.trello-open-card').click();
+ const editDetail=page.locator('#trello-detail');
+ await editDetail.getByRole('button',{name:'编辑描述',exact:true}).click();
+ const descriptionForm=editDetail.getByRole('form',{name:'修改描述',exact:true});
+ assert.match(await descriptionForm.getByLabel('描述',{exact:true}).inputValue(),/完整描述/);
+ await descriptionForm.getByLabel('描述',{exact:true}).fill('作业类型：阅读英语\n参考：https://example.com/new');
+ await page.evaluate(()=>window.failUpdate=true);
+ await descriptionForm.getByRole('button',{name:'保存',exact:true}).click();
+ await editDetail.locator('.trello-edit-feedback[data-error=true]').waitFor();
+ assert((await descriptionForm.getByLabel('描述',{exact:true}).inputValue()).includes('https://example.com/new'));
+ await page.evaluate(()=>window.failUpdate=false);
+ await descriptionForm.getByRole('button',{name:'保存',exact:true}).click();
+ await descriptionForm.waitFor({state:'detached'});
+ assert.equal(await editDetail.getByRole('link',{name:'https://example.com/new',exact:true}).count(),1);
+ assert.equal(await editableRow().locator('.trello-homework-type').textContent(),'阅读英语');
+ assert.equal(await editDetail.getByRole('button',{name:'编辑标题',exact:true}).count(),0);
+ await editDetail.getByRole('button',{name:'关闭',exact:true}).click();
  const beforeRefresh=await page.evaluate(()=>messages.filter(m=>m.type==='trello'&&m.op==='board').length);await page.locator('#trello-board').focus();await page.keyboard.press('Meta+r');await page.waitForFunction(n=>messages.filter(m=>m.type==='trello'&&m.op==='board').length===n+1,beforeRefresh);await page.waitForSelector('.trello-task');assert.equal(await page.evaluate(()=>messages.filter(m=>m.type==='refresh').length),0);
  await page.keyboard.press('Meta+1');await page.keyboard.press('Meta+r');await page.waitForFunction(()=>messages.some(m=>m.type==='refresh'));assert.equal(await page.evaluate(()=>messages.filter(m=>m.type==='trello'&&m.op==='board').length),beforeRefresh+1);await page.keyboard.press('Meta+5');
  assert.equal(await page.evaluate(()=>messages.filter(m=>m.op==='board').at(-1).cache),false);
@@ -67,16 +113,36 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  await page.locator('.trello-task').first().locator('.trello-open-card').click();await page.waitForSelector('.trello-description');const detailReads=await reads();await page.clock.runFor(300020);assert.equal(await reads(),detailReads);assert(await page.locator('#trello-detail').isVisible());await page.getByRole('button',{name:'关闭',exact:true}).click();
  await page.locator('#trello-settings').click();await page.clock.runFor(300020);assert.equal(await reads(),detailReads);assert((await page.locator('.trello-guide').textContent()).includes('自动保持连接'));await page.getByRole('button',{name:'返回看板',exact:true}).click();await page.waitForSelector('.trello-task');
  await page.keyboard.press('Meta+1');const pausedReads=await reads();await page.clock.runFor(600020);assert.equal(await reads(),pausedReads);await page.keyboard.press('Meta+5');await page.clock.runFor(20);await page.waitForFunction(n=>messages.filter(m=>m.type==='trello'&&m.op==='board').length===n+1,pausedReads);await page.waitForSelector('.trello-task');
- await page.evaluate(()=>{const task=(id,idList,hour,completed)=>({id,name:id,idList,due:`2026-11-01T${String(hour).padStart(2,'0')}:00:00Z`,dateCompleted:completed||null});window.testCards=[task('待完成较晚','todo',4),task('同完成较晚预计','done',3,'2026-11-01T02:00:00Z'),task('无实际时间','done',0),task('实际更早','done',15,'2026-11-01T01:00:00Z'),task('待完成较早','todo',2),task('同完成较早预计','done',1,'2026-11-01T02:00:00Z')];});await page.locator('#trello-refresh').click();await page.waitForFunction(()=>document.querySelectorAll('.trello-task').length===6);assert.deepEqual(await page.locator('.trello-open-card').allTextContents(),['待完成较早','待完成较晚','实际更早','同完成较早预计','同完成较晚预计','无实际时间']);assert.deepEqual(await page.locator('.trello-due-at').allTextContents(),['2026-11-01 10:00','2026-11-01 12:00','2026-11-01 23:00','2026-11-01 09:00','2026-11-01 11:00','2026-11-01 08:00']);await page.screenshot({path:'/tmp/cnote-trello-sorting-'+name+'.png'});
- assert.deepEqual(await page.locator('.trello-table th').allTextContents(),['标题','进度','打分结果','实际完成时间','预计完成时间','更新时间']);
+ await page.evaluate(()=>{const task=(id,idList,hour,completed,start)=>({id,name:id,idList,start,due:`2026-11-01T${String(hour).padStart(2,'0')}:00:00Z`,dateCompleted:completed||null});window.testCards=[task('待完成较晚','todo',4,null,'2026-11-01T00:30:00Z'),task('同完成较晚预计','done',3,'2026-11-01T02:00:00Z','2026-11-01T00:40:00Z'),task('无实际时间','done',0),task('实际更早','done',15,'2026-11-01T01:00:00Z'),task('待完成较早','todo',2),task('同完成较早预计','done',1,'2026-11-01T02:00:00Z','2026-11-01T00:40:00Z')];});await page.locator('#trello-refresh').click();await page.waitForFunction(()=>document.querySelectorAll('.trello-task').length===6);assert.deepEqual(await page.locator('.trello-open-card').allTextContents(),['待完成较晚','待完成较早','无实际时间','同完成较早预计','同完成较晚预计','实际更早']);assert.deepEqual(await page.locator('.trello-due-at').allTextContents(),['2026-11-01 12:00','2026-11-01 10:00','2026-11-01 08:00','2026-11-01 09:00','2026-11-01 11:00','2026-11-01 23:00']);await page.screenshot({path:'/tmp/cnote-trello-sorting-'+name+'.png'});
+ assert.deepEqual(await page.locator('.trello-table th').allTextContents(),['标题','作业类型','进度','打分结果','计划开始时间','实际完成时间','预计完成时间','更新时间']);
  await page.evaluate(()=>{testCards[0].desc='类型：   \n打分结果：中';});await page.locator('#trello-refresh').click();
  await page.waitForFunction(()=>[...document.querySelectorAll('.trello-grade')].some(cell=>cell.textContent==='中'));
- assert.deepEqual(await page.locator('.trello-table th').allTextContents(),['标题','进度','打分结果','实际完成时间','预计完成时间','更新时间']);
+ assert.deepEqual(await page.locator('.trello-table th').allTextContents(),['标题','作业类型','进度','打分结果','计划开始时间','实际完成时间','预计完成时间','更新时间']);
  await page.evaluate(()=>{testCards[0].desc='作业类型：阅读\n打分结果：   \n其他说明';});await page.locator('#trello-refresh').click();
  await page.waitForFunction(()=>[...document.querySelectorAll('.trello-homework-type')].some(cell=>cell.textContent==='阅读'));
- assert.deepEqual(await page.locator('.trello-table th').allTextContents(),['标题','作业类型','进度','打分结果','实际完成时间','预计完成时间','更新时间']);
+ assert.deepEqual(await page.locator('.trello-table th').allTextContents(),['标题','作业类型','进度','打分结果','计划开始时间','实际完成时间','预计完成时间','更新时间']);
 
- await page.evaluate(()=>{delete window.testCards;failImageOnce=true;});await page.locator('#trello-refresh').click();await page.waitForFunction(()=>document.querySelectorAll('.trello-task').length===4);
+ await page.evaluate(()=>{
+  window.testLists=[{id:'todo',name:'待完成'},{id:'fix',name:'待改错'},{id:'done',name:'已完成'}];
+  const event=(time,correction=false)=>({at:Date.parse('2026-11-01T'+time+'Z')/1000,correction});
+  testCards[0].homeworkStarted=event('02:15:00');
+  testCards[1].homeworkStarted=event('05:00:00');
+  testCards[4].start='2026-11-01T01:00:00Z';
+  testCards.push(
+   {id:'fixing',name:'开始订正',idList:'fix',start:'2026-11-01T01:30:00Z',due:'2026-11-01T05:00:00Z',homeworkStarted:event('03:10:00',true)},
+   {id:'old',name:'等待订正',idList:'fix',due:'2026-11-01T05:00:00Z',homeworkStarted:event('04:20:00')}
+  );
+ });
+ await page.locator('#trello-refresh').click();
+ await page.waitForFunction(()=>document.querySelectorAll('.trello-started-time').length===2);
+ assert.deepEqual((await page.locator('.trello-open-card').allTextContents()).slice(0,5),['待完成较晚','开始订正','待完成较早','等待订正','无实际时间']);
+ assert.deepEqual(await page.locator('.trello-started-time').allTextContents(),['11-01 10:15','11-01 11:10']);
+ assert.deepEqual(await page.locator('.trello-task-group').allTextContents(),['正在做','还没做','做完']);
+ await page.getByRole('button',{name:'开始订正',exact:true}).click();
+ assert.match(await page.locator('.trello-card-status').textContent(),/已开始 · 实际开始 2026-11-01 11:10/);
+ await page.getByRole('button',{name:'关闭',exact:true}).click();
+
+ await page.evaluate(()=>{delete window.testCards;delete window.testLists;failImageOnce=true;});await page.locator('#trello-refresh').click();await page.waitForFunction(()=>document.querySelectorAll('.trello-task').length===4);
  await page.locator('.trello-task').first().locator('.trello-open-card').click();await page.waitForSelector('.trello-description');assert.equal(await page.locator('.trello-description').textContent(),'类型：普通作业\n完整描述\n作业：打开练习\n参考：https://example.org/page_(one)。\nhttps://example.net/help\n[危险链接](javascript:alert(1))');assert((await page.locator('.trello-action').textContent()).includes('完整评论'));assert.equal(await page.locator('.trello-action').isVisible(),false);await page.locator('.trello-activity summary').click();assert(await page.locator('.trello-action').isVisible());assert.equal(await page.locator('.trello-action p').count(),0);const detail=page.locator('#trello-detail');
  assert.deepEqual(await detail.getByRole('link').evaluateAll(links=>links.map(link=>link.href)),[
   'https://example.com/practice?a=1&b=2','https://example.org/page_(one)','https://example.net/help',

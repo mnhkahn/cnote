@@ -12,6 +12,7 @@ use reqwest::{StatusCode, blocking::Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     io::Read,
     sync::Mutex,
     time::{Duration, Instant},
@@ -86,6 +87,8 @@ pub fn error_code(error: &anyhow::Error) -> &'static str {
     }
 }
 const API: &str = "https://api.trello.com/1";
+const BOARD_CARD_FIELDS: &str =
+    "name,desc,start,due,dueComplete,idList,closed,url,labels,dateLastActivity,dateCompleted";
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct Credentials {
     key: String,
@@ -596,6 +599,7 @@ fn description_with_grade(description: &str, grade: &str) -> Result<String> {
         ["", "100", "优", "良", "中", "差"].contains(&grade),
         "请选择有效评分"
     );
+    let (description, times) = homework_description_parts(description);
     let newline = if description.contains("\r\n") {
         "\r\n"
     } else {
@@ -617,7 +621,151 @@ fn description_with_grade(description: &str, grade: &str) -> Result<String> {
             if body.is_empty() { "" } else { newline }
         )
     };
-    Ok(output)
+    Ok(with_homework_times(&output, &times))
+}
+
+fn homework_time_override(line: &str) -> Option<(&str, &str)> {
+    let (field, value) = line
+        .trim_end_matches(['\r', '\n'])
+        .strip_prefix("<!-- cnote ")?
+        .strip_suffix(" -->")?
+        .split_once('=')?;
+    (matches!(field, "dateCompleted" | "dateLastActivity")
+        && chrono::DateTime::parse_from_rfc3339(value).is_ok())
+    .then_some((field, value))
+}
+
+fn homework_description_parts(description: &str) -> (String, String) {
+    let (text, mut times): (String, String) = description
+        .split_inclusive('\n')
+        .partition(|line| homework_time_override(line).is_none());
+    if let Ok(Value::Object(mut data)) = serde_json::from_str::<Value>(&text) {
+        let mut stripped = false;
+        for field in ["dateCompleted", "dateLastActivity"] {
+            let key = format!("_cnote_{field}");
+            if let Some(value) = data.get(&key).and_then(Value::as_str)
+                && chrono::DateTime::parse_from_rfc3339(value).is_ok()
+            {
+                times.push_str(&format!("<!-- cnote {field}={value} -->\n"));
+                data.remove(&key);
+                stripped = true;
+            }
+        }
+        if stripped {
+            return (Value::Object(data).to_string(), times);
+        }
+    }
+    (text, times)
+}
+
+fn with_homework_times(description: &str, times: &str) -> String {
+    if times.is_empty() {
+        return description.to_owned();
+    }
+    if let Ok(Value::Object(mut data)) = serde_json::from_str::<Value>(description) {
+        for (field, value) in times.lines().filter_map(homework_time_override) {
+            data.insert(format!("_cnote_{field}"), json!(value));
+        }
+        return Value::Object(data).to_string();
+    }
+    let first = description.split_inclusive('\n').next().unwrap_or_default();
+    if first
+        .split_once([':', '：'])
+        .is_some_and(|(key, _)| key.trim() == "打分结果")
+    {
+        let newline = if first.ends_with('\n') { "" } else { "\n" };
+        return format!("{first}{newline}{times}{}", &description[first.len()..]);
+    }
+    format!("{times}{description}")
+}
+
+fn homework_type_description(description: &str, value: &str) -> Result<String> {
+    anyhow::ensure!(!value.contains(['\r', '\n']), "作业类型只能填写一行");
+    let (text, times) = homework_description_parts(description);
+    if let Ok(Value::Object(mut data)) = serde_json::from_str::<Value>(&text) {
+        if value.is_empty() {
+            data.remove("type");
+        } else {
+            data.insert("type".into(), json!(value));
+        }
+        return Ok(with_homework_times(
+            &serde_json::to_string_pretty(&data)?,
+            &times,
+        ));
+    }
+    let mut existing_type = false;
+    let mut updated = String::new();
+    for line in description.split_inclusive('\n') {
+        if line.split_once([':', '：']).is_some_and(|(key, _)| {
+            matches!(key.trim(), "类型" | "作业类型") || key.trim().eq_ignore_ascii_case("type")
+        }) {
+            if !existing_type && !value.is_empty() {
+                let end = line.trim_end_matches(['\r', '\n']).len();
+                updated.push_str(&format!("作业类型：{value}{}", &line[end..]));
+            }
+            existing_type = true;
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if !existing_type && !value.is_empty() {
+        let newline = if description.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        updated = with_homework_times(&updated, &format!("作业类型：{value}{newline}"));
+    }
+    Ok(updated)
+}
+
+fn apply_homework_activity(cards: &mut [Value], actions: &[Value]) {
+    let mut latest = HashMap::new();
+    for action in actions {
+        if action["type"] != "commentCard" {
+            continue;
+        }
+        let data = &action["data"];
+        let Some(card) = data["card"]["id"].as_str() else {
+            continue;
+        };
+        let Some((marker, payload)) = data["text"]
+            .as_str()
+            .and_then(|text| text.split_once('\n'))
+            .and_then(|(_, text)| text.split_once('\n'))
+        else {
+            continue;
+        };
+        if marker.trim_end() != "[homework-activity:v1]" {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        let (Some(at), Some(correction)) = (event["at"].as_i64(), event["correction"].as_bool())
+        else {
+            continue;
+        };
+        if event["task_id"] != card || at <= 0 || chrono::DateTime::from_timestamp(at, 0).is_none()
+        {
+            continue;
+        }
+        let completed = match event["event"].as_str() {
+            Some("started") => false,
+            Some("completed") => true,
+            _ => continue,
+        };
+        let current = latest.entry(card).or_insert((at, completed, correction));
+        // The tablet can upload events late. A completion wins if both happened in one second.
+        if (at, completed) > (current.0, current.1) {
+            *current = (at, completed, correction);
+        }
+    }
+    for card in cards {
+        if let Some(&(at, false, correction)) = card["id"].as_str().and_then(|id| latest.get(id)) {
+            card["homeworkStarted"] = json!({"at":at,"correction":correction});
+        }
+    }
 }
 
 fn identifier(v: &Value) -> Result<&str> {
@@ -803,18 +951,43 @@ pub fn request(v: Value) -> Result<Value> {
         "board" => {
             let id = identifier(&v)?;
             cached_list(&v, &account, &api.auth, id, || {
-                Ok(
-                    json!({"lists":api.get(&format!("/boards/{id}/lists"), &[("filter","open"),("fields","name,closed,pos")])?,"cards":api.get(&format!("/boards/{id}/cards"), &[("filter","open"),("fields","name,desc,due,dueComplete,idList,closed,url,labels,dateLastActivity,dateCompleted")])?}),
-                )
+                let lists = api.get(
+                    &format!("/boards/{id}/lists"),
+                    &[("filter", "open"), ("fields", "name,closed,pos")],
+                )?;
+                let mut cards = api.get(
+                    &format!("/boards/{id}/cards"),
+                    &[("filter", "open"), ("fields", BOARD_CARD_FIELDS)],
+                )?;
+                if let Some(cards) = cards.as_array_mut()
+                    && !cards.is_empty()
+                    && let Ok(actions) = api.get(
+                        &format!("/boards/{id}/actions"),
+                        &[
+                            ("filter", "commentCard"),
+                            ("limit", "1000"),
+                            ("fields", "type,data"),
+                            ("memberCreator", "false"),
+                        ],
+                    )
+                    && let Some(actions) = actions.as_array()
+                {
+                    apply_homework_activity(cards, actions);
+                }
+                Ok(json!({"lists": lists, "cards": cards}))
             })
         }
         "update_cell" => {
             let id = identifier(&v)?;
+            let _lock = review::Store::open(id)?;
             let card = api.get(
                 &format!("/cards/{id}"),
                 &[("fields", "desc,idBoard,idList")],
             )?;
-            let body = match v["field"].as_str().unwrap_or_default() {
+            let description = card["desc"].as_str().unwrap_or_default();
+            let field = v["field"].as_str().unwrap_or_default();
+            let value = v["value"].as_str().context("缺少字段值")?;
+            let body = match field {
                 "progress" => {
                     let list_id = identifier(&json!({"id":v["value"]}))?.to_owned();
                     let list = api.get(
@@ -834,8 +1007,55 @@ pub fn request(v: Value) -> Result<Value> {
                     body
                 }
                 "grade" => {
-                    let grade = v["value"].as_str().context("请选择有效评分")?;
-                    json!({"desc": description_with_grade(card["desc"].as_str().unwrap_or_default(), grade)?})
+                    json!({"desc": description_with_grade(description, value)?})
+                }
+                "homework_type" => {
+                    json!({"desc": homework_type_description(description, value.trim())?})
+                }
+                "start" | "due" | "dateCompleted" | "dateLastActivity" => {
+                    anyhow::ensure!(
+                        (value.is_empty() && field != "due")
+                            || chrono::DateTime::parse_from_rfc3339(value).is_ok(),
+                        "请输入有效的日期和时间"
+                    );
+                    if matches!(field, "start" | "due") {
+                        json!({(field): if value.is_empty() { Value::Null } else { json!(value) }})
+                    } else {
+                        let (text, existing_times) = homework_description_parts(description);
+                        let mut times: String = existing_times
+                            .split_inclusive('\n')
+                            .filter(|line| {
+                                homework_time_override(line).is_some_and(|(key, _)| key != field)
+                            })
+                            .collect();
+                        if !value.is_empty() {
+                            times.push_str(&format!("<!-- cnote {field}={value} -->\n"));
+                        }
+                        json!({"desc": with_homework_times(&text, &times)})
+                    }
+                }
+                "dueComplete" => match value {
+                    "true" => json!({"dueComplete": true}),
+                    "false" => json!({"dueComplete": false}),
+                    _ => bail!("请选择有效的完成标记"),
+                },
+                "desc" => {
+                    let (current, times) = homework_description_parts(description);
+                    let (draft, _) = homework_description_parts(value);
+                    let matches_current = |previous: &str| {
+                        let previous = homework_description_parts(previous).0;
+                        previous.replace("\r\n", "\n") == current.replace("\r\n", "\n")
+                            || matches!(
+                                (serde_json::from_str::<Value>(&previous), serde_json::from_str::<Value>(&current)),
+                                (Ok(Value::Object(a)), Ok(Value::Object(b))) if a == b
+                            )
+                    };
+                    anyhow::ensure!(
+                        v["previous"].as_str().is_some_and(matches_current)
+                            || matches_current(value),
+                        "描述已在别处更新，请重新打开作业详情后再编辑"
+                    );
+                    json!({"desc": with_homework_times(&draft, &times)})
                 }
                 _ => bail!("此字段不支持修改"),
             };
@@ -1070,13 +1290,7 @@ mod tests {
             let cards = api
                 .get(
                     &format!("/boards/{id}/cards"),
-                    &[
-                        ("filter", "open"),
-                        (
-                            "fields",
-                            "name,desc,due,dueComplete,idList,closed,url,labels,dateLastActivity,dateCompleted",
-                        ),
-                    ],
+                    &[("filter", "open"), ("fields", BOARD_CARD_FIELDS)],
                 )
                 .unwrap();
             assert!(
@@ -1286,6 +1500,76 @@ mod tests {
         assert_eq!(description_with_grade("", "优").unwrap(), "打分结果：优");
         assert_eq!(description_with_grade("原题", "").unwrap(), "原题");
         assert!(description_with_grade("原题", "优\n覆盖").is_err());
+    }
+
+    #[test]
+    fn homework_type_and_time_edits_preserve_the_assignment() {
+        let time = "<!-- cnote dateCompleted=2026-11-21T08:00:00Z -->\n";
+        let original = "打分结果：优\r\n类型: 普通作业\r\n作业内容：\r\n2 + 3 = ___";
+        let stored = with_homework_times(original, time);
+        assert!(stored.starts_with("打分结果：优\r\n"));
+        assert_eq!(homework_description_parts(&stored).0, original);
+        let typed = homework_type_description(&stored, "口算").unwrap();
+        assert!(typed.contains(time));
+        assert_eq!(
+            homework_description_parts(&typed).0,
+            "打分结果：优\r\n作业类型：口算\r\n作业内容：\r\n2 + 3 = ___"
+        );
+        let cleared = homework_type_description(&typed, "").unwrap();
+        assert_eq!(
+            homework_description_parts(&cleared).0,
+            "打分结果：优\r\n作业内容：\r\n2 + 3 = ___"
+        );
+        let graded = description_with_grade(&typed, "100").unwrap();
+        assert!(graded.contains(time));
+        assert!(graded.starts_with("打分结果：100\r\n"));
+        let structured = with_homework_times(r#"{"type":"arithmetic","count":5}"#, time);
+        assert_eq!(
+            serde_json::from_str::<Value>(&structured).unwrap()["_cnote_dateCompleted"],
+            "2026-11-21T08:00:00Z"
+        );
+        let updated = homework_type_description(&structured, "口算").unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&homework_description_parts(&updated).0).unwrap(),
+            json!({"type":"口算","count":5})
+        );
+    }
+
+    #[test]
+    fn homework_activity_uses_tablet_event_time_and_ignores_completed_attempts() {
+        let comment = |card: &str, task: &str, event: &str, at: i64, correction| {
+            let heading = if event == "started" {
+                "开始做作业"
+            } else {
+                "作业完成"
+            };
+            let payload = json!({"task_id":task, "event":event, "at":at, "correction":correction});
+            json!({"type":"commentCard","data":{
+                "card":{"id":card},"text":format!("{heading}\n[homework-activity:v1]\n{payload}")
+            }})
+        };
+        let mut cards = [
+            json!({"id":"active"}),
+            json!({"id":"finished"}),
+            json!({"id":"scheduled","start":"2026-11-21T01:00:00Z"}),
+        ];
+        apply_homework_activity(
+            &mut cards,
+            &[
+                comment("active", "active", "started", 300, true),
+                comment("active", "active", "completed", 200, false),
+                comment("finished", "finished", "completed", 300, false),
+                comment("finished", "finished", "started", 300, false),
+                comment("scheduled", "active", "started", 400, false),
+                json!({"type":"commentCard","data":{"card":{"id":"scheduled"},"text":"开始做作业"}}),
+            ],
+        );
+        assert_eq!(
+            cards[0]["homeworkStarted"],
+            json!({"at":300,"correction":true})
+        );
+        assert!(cards[1].get("homeworkStarted").is_none());
+        assert!(cards[2].get("homeworkStarted").is_none());
     }
     #[test]
     fn update_request_sends_json_and_handles_read_only_tokens() {

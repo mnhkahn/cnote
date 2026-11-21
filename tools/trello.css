@@ -38,3 +38,21 @@
 .trello-review-grade{display:inline-block;padding:2px 8px;border-radius:8px;background:var(--soft);font-weight:700}
 .trello-review-text{white-space:pre-wrap;user-select:text}
 .trello-review-entry audio{width:100%}
+.trello-cell-form{position:absolute;inset-block-start:0;inset-inline-start:0;z-index:3;display:grid;gap:8px;min-width:max-content;padding:8px;background:var(--bg);border:1px solid var(--accent);border-radius:5px;box-shadow:0 4px 12px #0002}
+.trello-updated-at .trello-cell-form,.trello-due-at .trello-cell-form,.trello-detail-field:nth-child(even) .trello-cell-form{inset-inline-start:auto;inset-inline-end:0}
+.trello-cell-form :is(input,textarea){box-sizing:border-box;padding:6px 8px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:4px;font:inherit}
+.trello-editor-actions,.trello-description-heading{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.trello-editor-actions{justify-content:flex-end}
+.trello-detail-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:6px 16px}
+.trello-detail-field{display:flex;align-items:center;justify-content:space-between;gap:8px;position:relative;min-height:32px}
+.trello-detail-field>span:first-child{color:var(--muted)}
+#trello-tool .trello-detail-value{height:auto;min-height:30px;text-align:end}
+.trello-description-heading{justify-content:space-between;margin-top:16px}
+.trello-description-heading h3{margin:0}
+.trello-detail-description .trello-cell-form{position:static;margin-top:8px;min-width:0}
+.trello-detail-description .trello-cell-form textarea{min-height:160px;resize:vertical}
+.trello-detail-description:has(form) .trello-description{display:none}
+.trello-edit-feedback:empty{display:none}
+.trello-edit-feedback[data-error=true]{color:var(--danger,#c53535)}
+.trello-started-time{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+.trello-table .trello-task-group td{padding-block:7px;background:var(--soft);font-size:12px;font-weight:600;color:var(--muted)}
