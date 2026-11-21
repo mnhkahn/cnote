@@ -79,7 +79,6 @@
   return start.at*1000;
  }
  const progressLabel=card=>startedAt(card)?'已开始':listName(card);
- const taskGroups=['正在做','还没做','做完'];
  const taskGroup=card=>startedAt(card)?0:submitted(card)?2:1;
  const plannedOrder=card=>Number.isFinite(timestamp(card.start))?timestamp(card.start):timestamp(card.due);
  const grade=card=>description(card).match(/^[ \t]*打分结果[ \t]*[:：][ \t]*([^\r\n]*)/m)?.[1].trim()||'';
@@ -190,12 +189,12 @@
   const daily=cards.filter(c=>!c.closed&&dueDay(c)===dayKey(selected));
   const table=node('table',null,'trello-table');table.setAttribute('aria-label','当天 Trello 任务');
   const head=node('thead'),heading=node('tr');for(const column of [{label:'标题',width:100-columns.reduce((sum,column)=>sum+column.width,0)},...columns]){const cell=node('th',column.label);cell.scope='col';cell.style.width=column.width+'%';heading.append(cell);}head.append(heading);table.append(head);
-  const body=node('tbody');let previousGroup=-1;
+  const body=node('tbody');
   for(const card of daily.sort((a,b)=>taskGroup(a)-taskGroup(b)||plannedOrder(a)-plannedOrder(b)||timestamp(a.due)-timestamp(b.due))){
    const group=taskGroup(card);
-   if(group!==previousGroup){
-    const header=node('tr',null,'trello-task-group'),label=node('td',taskGroups[group]);label.colSpan=columns.length+1;
-    header.append(label);body.append(header);previousGroup=group;
+   if(group===0&&!body.firstChild){
+    const header=node('tr',null,'trello-task-group'),label=node('td','正在做');label.colSpan=columns.length+1;
+    header.append(label);body.append(header);
    }
    const row=node('tr',null,'trello-task');row.dataset.completed=String(group===2);
    const titleCell=node('td');titleCell.append(button(card.name,()=>showDetail(card),'trello-open-card'));
