@@ -519,7 +519,7 @@
    return {...review,id:action.id,date:action.date};
   }catch{return null;}
  }
- function renderHomeworkReviews(body,card,epoch,initial){
+ function renderHomeworkReviews(body,card,epoch,initial,manualContainer){
   const section=node('section',null,'trello-review-history'),header=node('div',null,'trello-review-header');
   const status=node('p');status.setAttribute('role','status');
   const entries=node('div',null,'trello-review-entries');
@@ -527,7 +527,9 @@
   const symbols=new Map([['100','🏆'],['优','★'],['良','✓'],['中','●'],['差','△']]);
   let refreshId=0;
   const refresh=button('刷新批改',()=>reload());
-  header.append(node('h3','批改结果'),refresh);section.append(header,status,entries);body.append(section);
+  header.append(node('h3','批改结果'),refresh);section.append(header);
+  if(manualContainer)section.append(manualContainer);
+  section.append(status,entries);body.append(section);
   function display(data){
    if(!Array.isArray(data.actions)){status.textContent='批改结果加载失败';return;}
    const reviews=[...new Map(data.actions.map(homeworkReview).filter(Boolean).map(review=>[review.id,review])).values()]
@@ -587,8 +589,8 @@
   display(initial);
   return reload;
  }
- function renderHomework(container,card,attachments,epoch,saved,refreshReviews,applyCard){
-  const fields=homeworkFields(card);if(!fields.kind)return;
+ function renderHomework(container,manualContainer,card,attachments,epoch,saved,refreshReviews,applyCard,rememberReview,draft){
+  const fields=homeworkFields(card);
   const section=node('section',null,'trello-homework-review'),status=node('p'),actions=node('div',null,'trello-homework-actions');status.setAttribute('role','status');
   const reading=fields.kind==='reading';
   const candidates=attachments.filter(a=>a.isUpload!==false&&(reading?/^audio\//.test(a.mimeType||'')||/\.(m4a|mp3|wav|webm|ogg|aac|flac|amr|3gp|opus)$/i.test(a.name||''):/^image\/(jpeg|png|webp)$/.test(a.mimeType||'')||/\.(jpe?g|png|webp)$/i.test(a.name||''))).sort((a,b)=>String(b.date||b.id).localeCompare(String(a.date||a.id)));
@@ -596,45 +598,93 @@
   // Tablet attachments carry one UUID per submission. Keep older submissions out.
   const submission=a=>String(a?.name||'').match(/_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.[^.]+$/i)?.[1];
   const group=!reading&&submission(attachment)?candidates.filter(a=>submission(a)===submission(attachment)).sort((a,b)=>String(a.date||a.id).localeCompare(String(b.date||b.id))):attachment?[attachment]:[];
-  let publicationPending=false,reviewing=false,loading=false;
+  let publicationPending=false,working=false,loading=false;
   const missing=()=>group.length>2?'同一次提交超过2张图片，请分批批改。':!attachment?(reading?'暂无朗读录音，请先提交作业。':'暂无作业图片，请先提交作业。'):reading&&!fields.reference?'卡片缺少英文原文，请补充作业描述。':fields.kind==='dictation'&&!fields.words?'卡片缺少听写词表，请补充作业描述。':fields.kind==='arithmetic'&&(!Number.isInteger(fields.count)||fields.count<1||fields.count>100)?'卡片缺少本次应完成题数（1～100），请补充作业描述。':'';
-  const submit=button('开始自动阅卷',async()=>{
-   if(submit.disabled)return;
-   const extra={kind:fields.kind,attachment:attachment.id,...(!reading?{attachments:group.map(a=>a.id)}:{}),...(reading?{reference:fields.reference}:fields.kind==='dictation'?{words:fields.words}:{count:fields.count})},key=cacheKey();
-   reviewing=true;sync();status.textContent='正在阅卷并保存结果…';actions.replaceChildren();
-   try{const data=await request('review_homework',card.id,extra);homeworkResults.set(key,data);if(epoch===detailEpoch)display(data,true);}
-   catch(error){if(epoch===detailEpoch)status.textContent='阅卷失败：'+error.message;}
-   finally{reviewing=false;sync();}
-  },'primary');
-  section.append(node('h3','自动阅卷'),submit,status,actions);container.append(section);
-  const sync=()=>{submit.disabled=publicationPending||reviewing||loading||!!missing();};
   const cacheKey=()=>JSON.stringify([card.id,fields.kind,group.map(a=>a.id),reading?fields.reference:fields.kind==='dictation'?fields.words:String(fields.count)]);
+  const submit=button('开始自动阅卷',()=>{
+   if(submit.disabled)return;
+   const extra={kind:fields.kind,attachment:attachment.id,...(!reading?{attachments:group.map(a=>a.id)}:{}),...(reading?{reference:fields.reference}:fields.kind==='dictation'?{words:fields.words}:{count:fields.count})};
+   actions.replaceChildren();
+   send('review_homework',extra,status,'正在阅卷并保存结果…','阅卷失败：',cacheKey());
+  },'primary');
+  section.append(node('h3','自动阅卷'),submit,status,actions);
+  const manual=node('details',null,'trello-manual-review'),form=node('form');
+  const grade=node('select'),feedback=node('textarea'),manualStatus=node('p'),manualActions=node('div',null,'trello-homework-actions');
+  grade.id='trello-manual-grade';grade.required=true;
+  grade.append(new Option('请选择评分',''),...['100','优','良','中','差'].map(value=>new Option(value,value)));
+  feedback.id='trello-manual-feedback';feedback.rows=4;feedback.maxLength=4000;
+  feedback.placeholder='例如：第3题漏写单位，请补上；第5题请重新列式。';
+  const gradeLabel=node('label','评分');gradeLabel.htmlFor=grade.id;
+  const feedbackLabel=node('label','批改说明');feedbackLabel.htmlFor=feedback.id;
+  const manualSubmit=button('提交批改',null,'primary');manualSubmit.type='submit';
+  manualStatus.setAttribute('role','status');
+  manual.open=draft.open;grade.value=draft.grade;feedback.value=draft.feedback;
+  manual.ontoggle=()=>{if(manual.isConnected)draft.open=manual.open;};
+  grade.onchange=()=>{draft.grade=grade.value;};feedback.oninput=()=>{draft.feedback=feedback.value;};
+  form.onsubmit=event=>{
+   event.preventDefault();
+   if(manualSubmit.disabled)return;
+   if(grade.value!=='100'&&!feedback.value.trim()){
+    manualStatus.textContent='请填写错题和订正要求';feedback.focus();return;
+   }
+   send('manual_homework_review',{grade:grade.value,feedback:feedback.value},manualStatus,'正在提交批改…','提交失败：');
+  };
+  form.append(gradeLabel,grade,feedbackLabel,feedback,manualSubmit);
+  manual.append(node('summary','手动批改'),form,manualStatus,manualActions);
+  manualContainer.replaceChildren(manual);if(fields.kind)container.append(section);
+  function sync(){
+   submit.disabled=publicationPending||working||loading||!!missing();
+   manualSubmit.disabled=grade.disabled=feedback.disabled=publicationPending||working;
+  }
+  async function send(op,extra,target,progress,failure,key){
+   if(working)return;
+   working=true;sync();target.textContent=progress;
+   try{
+    const data=await request(op,card.id,extra);
+    if(key)homeworkResults.set(key,data);
+    if(epoch===detailEpoch){rememberReview(data);display(data,true);}
+   }catch(error){if(epoch===detailEpoch)target.textContent=failure+error.message;}
+   finally{working=false;sync();}
+  }
   const applyPublication=data=>{
    if(!data.card)return;
    Object.assign(card,data.card);const index=cards.findIndex(c=>c.id===card.id);if(index>=0)cards[index]={...cards[index],...data.card};
    if(!lists.some(l=>l.id===card.idList))lists.push({id:card.idList,name:data.report?.grade==='100'?'已完成':'待改错'});
    render();applyCard();
   };
-  const display=(data,apply=false)=>{
-   actions.replaceChildren();publicationPending=data.published===false;sync();
-   if(data.published===true){status.textContent='阅卷结果已保存到 Trello';if(apply){applyPublication(data);refreshReviews();}}
-   else if(publicationPending){
-    status.textContent='阅卷完成，保存失败：'+(data.publication_error||'请重试保存结果');
+  function display(data,apply=false){
+   const isManual=data.input?.kind==='manual',useManual=isManual||!fields.kind;
+   const target=useManual?manualStatus:status,retryActions=useManual?manualActions:actions;
+   actions.replaceChildren();manualActions.replaceChildren();publicationPending=data.published===false;sync();
+   if(data.published===true){
+    target.textContent=isManual?'批改已提交到 Trello':'阅卷结果已保存到 Trello';
+    if(apply){
+     if(isManual){grade.value=draft.grade='';feedback.value=draft.feedback='';}
+     applyPublication(data);refreshReviews();
+    }
+   }else if(publicationPending){
+    if(useManual)manual.open=draft.open=true;
+    if(isManual){grade.value=draft.grade=data.report.grade;feedback.value=draft.feedback=data.report.feedback;}
+    target.textContent=(isManual?'批改保存失败：':'阅卷完成，保存失败：')+(data.publication_error||'请重试保存结果');
     const retry=button('重试保存结果',async()=>{
-     retry.disabled=true;status.textContent='正在保存阅卷结果…';
-     try{const updated=await request('publish_homework',card.id,{review_id:data.review_id});homeworkResults.set(cacheKey(),updated);if(epoch===detailEpoch)display(updated,true);}
-     catch(error){if(epoch===detailEpoch){status.textContent='保存失败：'+error.message;retry.disabled=false;}}
-    });actions.append(retry);
-   }else status.textContent='阅卷结果尚未确认保存，请重新打开卡片核对。';
-  };
-  const cached=homeworkResults.get(cacheKey());
-  if(saved||cached)display(saved||cached);else status.textContent=missing();
+     retry.disabled=true;
+     await send('publish_homework',{review_id:data.review_id},target,
+       isManual?'正在提交批改…':'正在保存阅卷结果…','保存失败：',isManual?null:cacheKey());
+     retry.disabled=false;
+    });retryActions.append(retry);
+   }else target.textContent=isManual?'批改尚未确认保存，请重新打开卡片核对。':'阅卷结果尚未确认保存，请重新打开卡片核对。';
+  }
+  const cached=fields.kind?homeworkResults.get(cacheKey()):null;
+  const initial=saved&&(fields.kind||saved.input?.kind==='manual'||saved.published===false)?saved:cached;
+  const hasAutoResult=initial&&initial.input?.kind!=='manual';
+  status.textContent=missing();
+  if(initial)display(initial);
   sync();
   if(reading&&!fields.reference&&fields.link&&!publicationPending){
-   loading=true;sync();if(!saved&&!cached&&!reviewing)status.textContent='正在准备课文…';
+   loading=true;sync();if(!hasAutoResult)status.textContent='正在准备课文…';
    request('reading_source',card.id,{link:fields.link}).then(data=>{
-    if(epoch!==detailEpoch)return;fields.reference=data.reference||'';loading=false;sync();if(!saved&&!cached&&!reviewing)status.textContent=missing();
-   }).catch(()=>{if(epoch===detailEpoch){loading=false;sync();if(!saved&&!cached&&!reviewing)status.textContent='课文读取失败，请稍后重新打开卡片。';}});
+    if(epoch!==detailEpoch)return;fields.reference=data.reference||'';loading=false;sync();if(!hasAutoResult)status.textContent=missing();
+   }).catch(()=>{if(epoch===detailEpoch){loading=false;sync();if(!hasAutoResult)status.textContent='课文读取失败，请稍后重新打开卡片。';}});
   }
  }
  function detailFields(full,body,onDescriptionChanged){
@@ -683,12 +733,16 @@
    if(full.labels?.length)body.append(node('p','标签：'+full.labels.map(l=>l.name||l.color).join('、')));
    if(full.members?.length)body.append(node('p','成员：'+full.members.map(m=>m.fullName||m.username).join('、')));
    for(const checklist of full.checklists||[]){body.append(node('h3',checklist.name));for(const item of checklist.checkItems||[])body.append(linkedText('p',(item.state==='complete'?'☑ ':'☐ ')+item.name));}
-   const refreshReviews=renderHomeworkReviews(body,full,epoch,data);
-   const renderReview=(saved)=>{
+   const manualContainer=readOnly()?null:node('div');
+   const refreshReviews=renderHomeworkReviews(body,full,epoch,data,manualContainer);
+   let savedReview=data.homework_review;
+   const manualDraft={open:false,grade:'',feedback:''};
+   const renderReview=()=>{
     reviewContainer.replaceChildren();
-    if(!readOnly())renderHomework(reviewContainer,full,data.attachments||[],epoch,saved,refreshReviews,applyCard);
+    if(manualContainer)renderHomework(reviewContainer,manualContainer,full,data.attachments||[],epoch,savedReview,refreshReviews,applyCard,
+      result=>{savedReview=result;},manualDraft);
    };
-   body.append(reviewContainer);renderReview(data.homework_review);
+   body.append(reviewContainer);renderReview();
    body.append(node('h3','附件'));
    if(readOnly()&&data.attachments?.length){
     const names=node('ul');

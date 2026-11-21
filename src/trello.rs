@@ -796,6 +796,7 @@ pub fn request(v: Value) -> Result<Value> {
                 | "update_cell"
                 | "publish_homework"
                 | "review_homework"
+                | "manual_homework_review"
         )
     )
     .then(|| InvalidateListCache);
@@ -935,6 +936,7 @@ pub fn request(v: Value) -> Result<Value> {
         | "homework_attachments"
         | "update_cell"
         | "review_homework"
+        | "manual_homework_review"
         | "publish_homework"
         | "reading_source" => {}
         _ => bail!("未知的 Trello 操作"),
@@ -1062,6 +1064,7 @@ pub fn request(v: Value) -> Result<Value> {
             Ok(json!({"card":api.put(&format!("/cards/{id}"), &body)?}))
         }
         "review_homework" => review::review(&api, &v),
+        "manual_homework_review" => review::manual(&api, &v),
         "publish_homework" => review::retry(&api, &v),
         "reading_source" => crate::homework::reading_source(v["link"].as_str().unwrap_or_default()),
         "homework_attachments" => {

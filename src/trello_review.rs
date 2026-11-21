@@ -1,4 +1,4 @@
-//! Durable publication of automatic reviews using the tablet's v1 comment protocol.
+//! Durable publication of homework reviews using the tablet's v1 comment protocol.
 use super::*;
 use std::{
     fs::{File, OpenOptions},
@@ -119,7 +119,14 @@ fn comment(review: &Review) -> Result<String> {
     let grade = grade(&review.result)?;
     let provisional = report["provisional"] == true;
     let mut lines = Vec::new();
-    if review.result["input"]["kind"] == "reading" {
+    if review.result["input"]["kind"] == "manual" {
+        lines.push(
+            report["feedback"]
+                .as_str()
+                .context("缺少手动批改说明")?
+                .to_owned(),
+        );
+    } else if review.result["input"]["kind"] == "reading" {
         let feedback = report["feedback"]
             .as_str()
             .filter(|feedback| !feedback.trim().is_empty())
@@ -349,10 +356,61 @@ fn run(api: &Api, card: &str, store: &Store, review: &mut Review) -> Value {
     }
     result
 }
+fn save_and_publish(api: &Api, card: &str, store: &Store, result: Value) -> Result<Value> {
+    let mut review = Review {
+        review_id: uuid::Uuid::new_v4().to_string(),
+        result,
+        comment_attempted: false,
+        comment_id: None,
+        list_attempted: false,
+        done: false,
+    };
+    store.save(&review)?;
+    Ok(run(api, card, store, &mut review))
+}
+
+fn manual_result(v: &Value) -> Result<Value> {
+    let grade = v["grade"].as_str().unwrap_or_default();
+    anyhow::ensure!(
+        ["100", "优", "良", "中", "差"].contains(&grade),
+        "请选择评分"
+    );
+    let feedback = v["feedback"].as_str().unwrap_or_default();
+    anyhow::ensure!(
+        feedback.encode_utf16().count() <= 4000
+            && !feedback
+                .chars()
+                .any(|ch| ch.is_control() && !matches!(ch, '\t' | '\r' | '\n')),
+        "请输入最多 4000 字的批改说明"
+    );
+    let feedback = if feedback.trim().is_empty() {
+        anyhow::ensure!(grade == "100", "请填写错题和订正要求");
+        "全部正确。"
+    } else {
+        feedback
+    };
+    Ok(json!({"input":{"kind":"manual"},"report":{"grade":grade,"feedback":feedback}}))
+}
+
+pub(super) fn manual(api: &Api, v: &Value) -> Result<Value> {
+    let card = identifier(v)?;
+    let result = manual_result(v)?;
+    let store = Store::open(card)?;
+    anyhow::ensure!(
+        !store.load()?.is_some_and(|review| !review.done),
+        "这张卡片有待保存的批改结果，请先重试保存"
+    );
+    save_and_publish(api, card, &store, result)
+}
+
 pub(super) fn review(api: &Api, v: &Value) -> Result<Value> {
     let card = identifier(v)?;
     let store = Store::open(card)?;
     if let Some(mut pending) = store.load()?.filter(|r| !r.done) {
+        anyhow::ensure!(
+            pending.result["input"]["kind"] != "manual",
+            "这张卡片有待保存的手动批改，请先重试保存"
+        );
         return Ok(run(api, card, &store, &mut pending));
     }
     let ids = match v.get("attachments") {
@@ -384,16 +442,7 @@ pub(super) fn review(api: &Api, v: &Value) -> Result<Value> {
     };
     result["source_attachment"] = ids[0].clone();
     result["source_attachments"] = json!(ids);
-    let mut review = Review {
-        review_id: uuid::Uuid::new_v4().to_string(),
-        result,
-        comment_attempted: false,
-        comment_id: None,
-        list_attempted: false,
-        done: false,
-    };
-    store.save(&review)?;
-    Ok(run(api, card, &store, &mut review))
+    save_and_publish(api, card, &store, result)
 }
 pub(super) fn retry(api: &Api, v: &Value) -> Result<Value> {
     let card = identifier(v)?;
@@ -438,6 +487,45 @@ mod tests {
     }
     fn lists() -> Value {
         json!([{"id":DONE,"name":"已完成"},{"id":CORRECTED,"name":"已改错"},{"id":FIX,"name":"待改错"}])
+    }
+    #[test]
+    fn manual_feedback_publishes_verbatim_and_sets_correction_status() {
+        let feedback = "第3题漏写单位，请补上。\n第5题重新列式。";
+        let mut review = review("良");
+        review.result = manual_result(&json!({"grade":"良","feedback":feedback})).unwrap();
+        let updated = publish(
+            &mut review,
+            CARD,
+            |method, path, body| match method {
+                "POST" if path.ends_with("/actions/comments") => {
+                    let text = body.unwrap()["text"].as_str().unwrap();
+                    let payload: Value =
+                        serde_json::from_str(text.strip_prefix("作业批改：\n").unwrap()).unwrap();
+                    assert_eq!(payload["version"], 1);
+                    assert_eq!(payload["type"], "text");
+                    assert_eq!(payload["grade"], "良");
+                    assert_eq!(payload["has_errors"], true);
+                    assert_eq!(payload["text"], feedback);
+                    Ok(json!({"id":"action"}))
+                }
+                "GET" if path.starts_with("/cards/") => Ok(current(CORRECTED)),
+                "GET" => Ok(lists()),
+                "PUT" => Ok(body.unwrap().clone()),
+                _ => panic!("unexpected request"),
+            },
+            |_| Ok(()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(updated["idList"], FIX);
+        assert_eq!(updated["dueComplete"], false);
+        assert_eq!(updated["desc"], "打分结果：良\n作业类型：口算\n原题保留");
+        assert!(manual_result(&json!({"grade":"良","feedback":" "})).is_err());
+        assert!(manual_result(&json!({"grade":"超优","feedback":feedback})).is_err());
+        assert_eq!(
+            manual_result(&json!({"grade":"100"})).unwrap()["report"]["feedback"],
+            "全部正确。"
+        );
     }
     #[test]
     fn all_grades_publish_comment_grade_and_requested_status() {
