@@ -191,12 +191,7 @@
   const head=node('thead'),heading=node('tr');for(const column of [{label:'标题',width:100-columns.reduce((sum,column)=>sum+column.width,0)},...columns]){const cell=node('th',column.label);cell.scope='col';cell.style.width=column.width+'%';heading.append(cell);}head.append(heading);table.append(head);
   const body=node('tbody');
   for(const card of daily.sort((a,b)=>taskGroup(a)-taskGroup(b)||plannedOrder(a)-plannedOrder(b)||timestamp(a.due)-timestamp(b.due))){
-   const group=taskGroup(card);
-   if(group===0&&!body.firstChild){
-    const header=node('tr',null,'trello-task-group'),label=node('td','正在做');label.colSpan=columns.length+1;
-    header.append(label);body.append(header);
-   }
-   const row=node('tr',null,'trello-task');row.dataset.completed=String(group===2);
+   const row=node('tr',null,'trello-task');row.dataset.completed=String(submitted(card));
    const titleCell=node('td');titleCell.append(button(card.name,()=>showDetail(card),'trello-open-card'));
    row.append(titleCell);for(const column of columns){
     const cell=node('td',column.value(card)||'—',column.cls);row.append(cell);

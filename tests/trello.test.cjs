@@ -137,7 +137,7 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  await page.waitForFunction(()=>document.querySelectorAll('.trello-started-time').length===2);
  assert.deepEqual((await page.locator('.trello-open-card').allTextContents()).slice(0,5),['待完成较晚','开始订正','待完成较早','等待订正','无实际时间']);
  assert.deepEqual(await page.locator('.trello-started-time').allTextContents(),['11-01 10:15','11-01 11:10']);
- assert.deepEqual(await page.locator('.trello-task-group').allTextContents(),['正在做']);
+ assert.equal(await page.locator('.trello-table tbody tr:not(.trello-task)').count(),0);
  await page.getByRole('button',{name:'开始订正',exact:true}).click();
  assert.match(await page.locator('.trello-card-status').textContent(),/已开始 · 实际开始 2026-11-01 11:10/);
  await page.getByRole('button',{name:'关闭',exact:true}).click();

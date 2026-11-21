@@ -55,7 +55,6 @@
 .trello-edit-feedback:empty{display:none}
 .trello-edit-feedback[data-error=true]{color:var(--danger,#c53535)}
 .trello-started-time{display:block;color:var(--muted);font-size:11px;margin-top:2px}
-.trello-table .trello-task-group td{padding-block:7px;background:var(--soft);font-size:12px;font-weight:600;color:var(--muted)}
 .trello-manual-review{margin:16px 0;border:1px solid var(--line);border-radius:10px;padding:12px}
 .trello-manual-review summary{cursor:pointer;font-weight:600}
 .trello-manual-review form{display:grid;gap:6px;margin-top:12px}
