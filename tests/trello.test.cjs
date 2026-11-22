@@ -17,10 +17,14 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  if(m.op==='transcribe_audio'){window.pendingASR=m.request;return;}
  if(m.op==='download'||m.op==='download_audio'){window.pendingDownload=m.request;return;}
  if(m.op==='attachment'){
+ if(m.attachment==='image-first'&&m.original){window.pendingFirstImage=m.request;return;}
  if(m.attachment==='image'&&failImageOnce){failImageOnce=false;cnoteTrello.receive({request:m.request,error:'模拟附件加载失败'});return;}
- const data=m.attachment==='image'?{mime:'image/png',base64:'${png}'}:m.attachment==='audio'?{mime:'audio/wav',base64:'${wav.toString('base64')}'}:{mime:'text/plain',base64:'${Buffer.from('附件正文 <img src=x onerror=alert(1)>').toString('base64')}'};cnoteTrello.receive({request:m.request,data});return;}
+ const data=['image','image-first','image-last'].includes(m.attachment)?{mime:'image/png',base64:'${png}'}:m.attachment==='audio'?{mime:'audio/wav',base64:'${wav.toString('base64')}'}:{mime:'text/plain',base64:'${Buffer.from('附件正文 <img src=x onerror=alert(1)>').toString('base64')}'};cnoteTrello.receive({request:m.request,data});return;}
  const card={id:'card',name:'练习 <img src=x>',desc:'类型：普通作业\\n完整描述\\n作业：[打开练习](https://example.com/practice?a=1&b=2)\\n参考：https://example.org/page_(one)。\\n<https://example.net/help>\\n[危险链接](javascript:alert(1))',idList:'todo',due:'2026-10-31T16:30:00Z',dueComplete:false,url:'https://trello.com/c/example',members:[{fullName:'成员甲'}],checklists:[{name:'练习步骤',checkItems:[{name:'第一步 https://example.net/step',state:'complete'}]}]};
- const data=m.op==='status'?{connected:true,key:'a'.repeat(32)}:m.op==='authorize'?{url:'https://trello.com/1/authorize?scope=read,write'}:m.op==='connect'?{connected:true}:m.op==='disconnect'?{connected:false}:m.op==='boards'?{boards:[{id:'board',name:'学习看板'}]}:m.op==='board'?{lists:window.testLists||[{id:'todo',name:'待完成'},{id:'done',name:'已完成'}],cards:window.testCards||[{...card,id:'donecard',idList:'done',name:'已完成任务',start:'2026-10-31T16:20:00Z',dateCompleted:'2026-11-01T03:00:00Z',dateLastActivity:'2026-11-01T03:00:00Z',desc:'打分结果：暂评·良\\n其他说明',dueComplete:false},{...card,id:'missingtime',idList:'done',name:'无完成记录任务',desc:''},{...card,id:'earlydone',idList:'done',name:'早完成任务',start:'2026-10-31T16:15:00Z',dateCompleted:'2026-11-01T01:00:00Z',dateLastActivity:'2026-11-01T05:00:00Z',desc:'打分结果：100\\n作业类型：口算'},card,{...card,id:'past',name:'昨天任务',due:'2026-10-31T02:00:00Z'},{...card,id:'none',due:null},{...card,id:'closed',closed:true}]}:{card:window.testCards?.find(item=>item.id===m.id)||card,attachments:[{id:'image',name:'附件图片',mimeType:'image/png',isUpload:true,date:'2026-11-01T01:00:00Z',url:'https://trello.com/file'},{id:'audio',name:'音频作业',mimeType:'audio/wav',isUpload:true,date:'2026-11-01T03:00:00Z',url:'https://trello.com/audio'},{id:'text',name:'文字附件',mimeType:'text/plain',isUpload:true,date:'2026-11-01T02:00:00Z',url:'https://trello.com/text'}],actions:[{type:'commentCard',date:'2026-11-01T01:00:00Z',memberCreator:{fullName:'作者'},data:{text:'完整评论 <img src=x onerror=alert(1)> [反馈](https://example.net/feedback)'}}]};cnoteTrello.receive({request:m.request,...(failBoards&&m.op==='boards'?{error:boardFailureCode==='auth_required'?'请先授权 Trello':'网络暂时不可用',code:boardFailureCode}:{data})});},5);}};
+ const data=m.op==='status'?{connected:true,key:'a'.repeat(32)}:m.op==='authorize'?{url:'https://trello.com/1/authorize?scope=read,write'}:m.op==='connect'?{connected:true}:m.op==='disconnect'?{connected:false}:m.op==='boards'?{boards:[{id:'board',name:'学习看板'}]}:m.op==='board'?{lists:window.testLists||[{id:'todo',name:'待完成'},{id:'done',name:'已完成'}],cards:window.testCards||[{...card,id:'donecard',idList:'done',name:'已完成任务',start:'2026-10-31T16:20:00Z',dateCompleted:'2026-11-01T03:00:00Z',dateLastActivity:'2026-11-01T03:00:00Z',desc:'打分结果：暂评·良\\n其他说明',dueComplete:false},{...card,id:'missingtime',idList:'done',name:'无完成记录任务',desc:''},{...card,id:'earlydone',idList:'done',name:'早完成任务',start:'2026-10-31T16:15:00Z',dateCompleted:'2026-11-01T01:00:00Z',dateLastActivity:'2026-11-01T05:00:00Z',desc:'打分结果：100\\n作业类型：口算'},card,{...card,id:'past',name:'昨天任务',due:'2026-10-31T02:00:00Z'},{...card,id:'none',due:null},{...card,id:'closed',closed:true}]}:{card:window.testCards?.find(item=>item.id===m.id)||card,attachments:[{id:'image',name:'附件图片',mimeType:'image/png',isUpload:true,date:'2026-11-01T01:00:00Z',url:'https://trello.com/file'},{id:'audio',name:'音频作业',mimeType:'audio/wav',isUpload:true,date:'2026-11-01T03:00:00Z',url:'https://trello.com/audio'},{id:'text',name:'文字附件',mimeType:'text/plain',isUpload:true,date:'2026-11-01T02:00:00Z',url:'https://trello.com/text'},...(window.extraImages?[
+ {id:'image-last',name:'最后一张',isUpload:true,date:'2026-11-01T00:00:00Z'},
+ {id:'image-first',name:'第一张.png',isUpload:true,date:'2026-11-01T04:00:00Z'}
+ ]:[])],actions:[{type:'commentCard',date:'2026-11-01T01:00:00Z',memberCreator:{fullName:'作者'},data:{text:'完整评论 <img src=x onerror=alert(1)> [反馈](https://example.net/feedback)'}}]};cnoteTrello.receive({request:m.request,...(failBoards&&m.op==='boards'?{error:boardFailureCode==='auth_required'?'请先授权 Trello':'网络暂时不可用',code:boardFailureCode}:{data})});},5);}};
  </script>`+html;await page.setContent(fixture);
  await page.keyboard.press('Meta+5');await page.waitForSelector('#trello-board option[value="board"]',{state:'attached'});
  assert.equal(await page.locator('.trello-day[aria-pressed=true]').getAttribute('aria-label'),'2026-11-01');assert.equal(await page.locator('.trello-day').first().getAttribute('aria-label'),'2026-10-26');
@@ -177,6 +181,8 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  await page.evaluate(()=>{cnoteTrello.receive({request:pendingDownload,data:{saved:true}});window.pendingDownload=null;});await page.waitForFunction(()=>document.getElementById('trello-message').textContent==='音频已保存');
  await page.locator('.trello-attachment-preview').first().screenshot({path:'/tmp/cnote-trello-audio-'+name+'.png'});
  await page.getByRole('button',{name:'放大图片：附件图片',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#trello-image-viewer > span[role=status]')?.textContent.startsWith('原图 ·'));assert(await page.evaluate(()=>messages.some(m=>m.type==='trello'&&m.op==='attachment'&&m.original===true)));const viewerImage=page.locator('.trello-image-stage img');
+ assert.equal(await page.getByRole('button',{name:'上一张',exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'下一张',exact:true}).count(),0);
  await viewerImage.click({button:'right'});
  assert.deepEqual(await page.locator('.trello-image-menu [role=menuitem]').allTextContents(),['复制图片','分享图片','在页面中打开','下载原图']);
  await page.getByRole('menuitem',{name:'分享图片',exact:true}).click();
@@ -199,6 +205,37 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' T
  await page.evaluate(()=>cnoteTrello.receive({request:pendingDownload,error:'原图下载超时，请重试'}));
  await page.waitForFunction(()=>document.querySelector('#trello-image-viewer > span[role=status]').textContent.includes('下载失败：原图下载超时'));
  await page.getByRole('button',{name:'原始大小',exact:true}).click();assert(await page.locator('.trello-image-stage img').evaluate(img=>Math.abs(img.getBoundingClientRect().width-img.naturalWidth)<1));await page.getByRole('button',{name:'顺时针旋转',exact:true}).click();assert((await page.locator('.trello-image-stage img').getAttribute('style')).includes('rotate(90deg)'));await page.getByRole('button',{name:'逆时针旋转',exact:true}).click();assert((await page.locator('.trello-image-stage img').getAttribute('style')).includes('rotate(0deg)'));await page.getByRole('button',{name:'逆时针旋转',exact:true}).click();assert((await page.locator('.trello-image-stage img').getAttribute('style')).includes('rotate(270deg)'));await page.getByRole('button',{name:'放大',exact:true}).click();assert.equal(await page.locator('.trello-image-zoom').textContent(),'125%');await page.keyboard.press('-');assert.equal(await page.locator('.trello-image-zoom').textContent(),'100%');await page.keyboard.press('+');assert.equal(await page.locator('.trello-image-zoom').textContent(),'125%');await page.keyboard.press('1');assert.equal(await page.locator('.trello-image-zoom').textContent(),'100%');await page.keyboard.press('r');assert((await page.locator('.trello-image-stage img').getAttribute('style')).includes('rotate(0deg)'));await page.keyboard.press('Shift+r');assert((await page.locator('.trello-image-stage img').getAttribute('style')).includes('rotate(270deg)'));assert.equal(await page.locator('.trello-image-toolbar button').evaluateAll(buttons=>buttons.every(b=>!b.textContent.trim()&&b.getAttribute('aria-label')&&b.title&&b.querySelector('.bi'))),true);await page.keyboard.press('1');for(let i=0;i<5;i++)await page.keyboard.press('+');const panBefore=await page.locator('.trello-image-viewport').evaluate(el=>({x:el.scrollLeft,y:el.scrollTop}));await page.keyboard.press('ArrowRight');assert((await page.locator('.trello-image-viewport').evaluate(el=>el.scrollLeft))>panBefore.x);await page.keyboard.press('ArrowDown');assert((await page.locator('.trello-image-viewport').evaluate(el=>el.scrollTop))>panBefore.y);await page.keyboard.press('0');await page.screenshot({path:'/tmp/cnote-trello-image-viewer-'+name+'.png'});assert.equal(await page.evaluate(()=>messages.filter(m=>m.type==='link').length),1);await page.getByRole('button',{name:'关闭图片',exact:true}).click();assert(await page.locator('#trello-detail').isVisible());await page.getByRole('button',{name:'放大图片：附件图片',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#trello-image-viewer > span[role=status]')?.textContent.startsWith('原图 ·'));assert.equal(await page.evaluate(()=>messages.filter(m=>m.op==='attachment'&&m.original===true).length),1);await page.keyboard.press('Escape');assert.equal(await page.locator('#trello-image-viewer').count(),0);await page.getByRole('button',{name:'关闭',exact:true}).click();assert((await page.evaluate(()=>revoked.length))>=2);
+ await page.evaluate(()=>window.extraImages=true);
+ await editableRow().locator('.trello-open-card').click();
+ await page.setViewportSize({width:390,height:740});
+ const imageThumbs=page.locator('.trello-image-thumb');
+ await imageThumbs.nth(2).waitFor();
+ assert.deepEqual(await imageThumbs.evaluateAll(buttons=>buttons.map(button=>button.getAttribute('aria-label'))),[
+  '放大图片：第一张.png','放大图片：附件图片','放大图片：最后一张'
+ ]);
+ await imageThumbs.nth(1).click();
+ const previous=page.getByRole('button',{name:'上一张',exact:true}),next=page.getByRole('button',{name:'下一张',exact:true});
+ assert(await previous.isEnabled());
+ assert(await next.isEnabled());
+ await previous.click();
+ assert.equal(await viewerImage.getAttribute('alt'),'第一张.png');
+ assert(await previous.isDisabled());
+ assert(await next.isEnabled());
+ await page.waitForFunction(()=>window.pendingFirstImage);
+ await next.click();
+ assert.equal(await viewerImage.getAttribute('alt'),'附件图片');
+ await next.click();
+ assert.equal(await viewerImage.getAttribute('alt'),'最后一张');
+ assert(await next.isDisabled());
+ assert(await previous.isEnabled());
+ await page.evaluate(base64=>cnoteTrello.receive({request:pendingFirstImage,data:{mime:'image/png',base64}}),png);
+ await page.waitForFunction(()=>document.querySelector('#trello-image-viewer > span[role=status]')?.textContent.startsWith('原图 ·'));
+ assert.equal(await viewerImage.getAttribute('alt'),'最后一张');
+ await previous.click();
+ assert.equal(await viewerImage.getAttribute('alt'),'附件图片');
+ await page.keyboard.press('Escape');
+ await page.getByRole('button',{name:'关闭',exact:true}).click();
+ await page.setViewportSize({width:1000,height:740});
  await page.locator('[aria-label="2026-10-31"]').click();assert.equal(await page.locator('.trello-task').count(),1);assert.equal(await page.locator('.trello-open-card').textContent(),'昨天任务');
  await page.locator('#trello-next').click();assert.equal(await page.locator('.trello-day[aria-pressed=true]').getAttribute('aria-label'),'2026-11-07');assert.equal(await page.locator('.trello-task').count(),0);await page.locator('#trello-today').click();assert.equal(await page.locator('.trello-task').count(),4);
  assert.equal(await page.evaluate(()=>cnoteTools.state.trelloBoard),'board');await page.screenshot({path:'/tmp/cnote-trello-'+name+'.png'});
