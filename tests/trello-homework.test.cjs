@@ -12,7 +12,7 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' a
    {id:'legacy',name:'英语阅读链接',desc:'作业类型：阅读英语\\n阅读英语链接：/ai/translate?textbook=0&article=1',idList:'todo'},
    {id:'missing',name:'口算缺少附件',desc:'',idList:'todo'},
    {id:'comprehension',name:'语文阅读理解',desc:'类型：普通作业\\n作业内容：回答课后问题',idList:'todo'},
-   {id:'multi',name:'口算两图10题',desc:'作业类型：口算',idList:'todo'},
+   {id:'multi',name:'口算两图',desc:'作业类型：口算',idList:'todo'},
    {id:'history',name:'已批改单词听写',desc:'作业类型：背单词\\n背单词：bus stop, camera',idList:'todo'}
   ];cards.forEach(c=>c.due=new Date().toISOString());
   window.ipc={postMessage(raw){const m=JSON.parse(raw);messages.push(m);if(m.type==='workspace')cnoteTools.show(m.index);if(m.type==='tool_ready')setTimeout(()=>cnoteTools.receive({type:'tool_state',state:{trelloBoard:'board'}}),0);if(m.type!=='trello')return;
@@ -25,7 +25,7 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' a
   const close=async()=>page.locator('#trello-detail').getByRole('button',{name:'关闭',exact:true}).click();
   await open('口算练习20题');assert.equal(await page.locator('.trello-homework-review input,.trello-homework-review textarea,.trello-homework-review select').count(),0);
   await page.getByRole('button',{name:'开始自动阅卷'}).click();
-  assert.deepEqual(await page.evaluate(()=>[reviewRequest.kind,reviewRequest.count,reviewRequest.attachment]),['arithmetic',20,'latest']);
+  assert.deepEqual(await page.evaluate(()=>[reviewRequest.kind,reviewRequest.attachment,Object.hasOwn(reviewRequest,'count')]),['arithmetic','latest',false]);
   assert(await page.getByRole('button',{name:'开始自动阅卷'}).isDisabled());
   await page.evaluate(()=>cnoteTrello.receive({request:reviewRequest.request,error:'服务忙'}));await page.getByText('阅卷失败：服务忙',{exact:true}).waitFor();
   await page.getByRole('button',{name:'开始自动阅卷'}).click();
@@ -42,7 +42,7 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' a
   await page.getByText('阅卷结果已保存到 Trello',{exact:true}).waitFor();assert.match(await page.locator('.trello-card-status').textContent(),/待改错/);assert.match(await page.locator('.trello-description').textContent(),/打分结果：优/);
   assert.equal(await page.locator('.trello-homework-result').count(),0);assert(!(await page.locator('.trello-homework-review').textContent()).includes('正确 19'));
   await close();await open('口算练习20题');await page.getByText('阅卷结果已保存到 Trello',{exact:true}).waitFor();assert.equal(await page.locator('.trello-homework-result').count(),0);await close();
-  await open('口算两图10题');await page.getByRole('button',{name:'开始自动阅卷'}).click();assert.deepEqual(await page.evaluate(()=>reviewRequest.attachments),['page1','page2']);assert.equal(await page.evaluate(()=>reviewRequest.count),10);await close();
+  await open('口算两图');await page.getByRole('button',{name:'开始自动阅卷'}).click();assert.deepEqual(await page.evaluate(()=>reviewRequest.attachments),['page1','page2']);assert.equal(await page.evaluate(()=>Object.hasOwn(reviewRequest,'count')),false);await close();
   await open('单词听写');assert.equal(await page.locator('.trello-homework-review textarea,.trello-homework-review select').count(),0);
   await page.getByRole('button',{name:'开始自动阅卷'}).click();assert.equal(await page.evaluate(()=>reviewRequest.kind),'dictation');assert.equal(await page.evaluate(()=>reviewRequest.words),'bus stop\ncamera\npost office');
   await page.evaluate(()=>cnoteTrello.receive({request:reviewRequest.request,data:{published:true,input:{kind:'dictation',words:['hungry','ice cream','lemonade']},report:{grade:'差',provisional:true,correct:1,incorrect:1,pending:1,total:3,items:[{number:1,raw:'e-reder game console',state:'uncertain',status:'pending'},{number:2,raw:'ice cream',state:'clear',status:'correct'},{number:3,raw:'temud',state:'clear',status:'incorrect'}]}}}));

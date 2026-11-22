@@ -58,24 +58,14 @@ fn review_uploads_at(base: &str, v: &Value, uploads: Vec<(Vec<u8>, String)>) -> 
         "请提交1至2张作业图片或一段录音"
     );
     let mut form = multipart::Form::new().text("kind", kind.to_owned());
-    match kind {
-        "arithmetic" => {
-            let count = v["count"]
-                .as_u64()
-                .filter(|n| (1..=100).contains(n))
-                .context("请填写本次应完成题数（1～100）")?;
-            form = form.text("count", count.to_string());
-        }
-        "dictation" | "reading" => {
-            let field = if reading { "reference" } else { "words" };
-            let text = v[field].as_str().unwrap_or_default().trim();
-            anyhow::ensure!(
-                !text.is_empty() && text.len() <= if reading { 30000 } else { 15000 },
-                "请补全有效的词表或英文原文"
-            );
-            form = form.text(field, text.to_owned());
-        }
-        _ => unreachable!(),
+    if matches!(kind, "dictation" | "reading") {
+        let field = if reading { "reference" } else { "words" };
+        let text = v[field].as_str().unwrap_or_default().trim();
+        anyhow::ensure!(
+            !text.is_empty() && text.len() <= if reading { 30000 } else { 15000 },
+            "请补全有效的词表或英文原文"
+        );
+        form = form.text(field, text.to_owned());
     }
     for (index, (bytes, mime)) in uploads.into_iter().enumerate() {
         let mime = mime.as_str();
@@ -200,7 +190,6 @@ mod tests {
     fn rejects_invalid_upload_before_network() {
         for v in [
             serde_json::json!({"kind":"normal"}),
-            serde_json::json!({"kind":"arithmetic","count":0}),
             serde_json::json!({"kind":"reading","reference":""}),
         ] {
             assert!(review_at("http://127.0.0.1:1", &v, vec![1], "image/png").is_err());
@@ -208,7 +197,7 @@ mod tests {
         assert!(
             review_at(
                 "http://127.0.0.1:1",
-                &serde_json::json!({"kind":"arithmetic","count":10}),
+                &serde_json::json!({"kind":"arithmetic"}),
                 vec![1],
                 "audio/mp4"
             )
@@ -218,12 +207,17 @@ mod tests {
     #[test]
     fn uploads_all_three_kinds_and_handles_errors() {
         for (kind, mime, field, endpoint) in [
-            ("arithmetic", "image/png", "count", "/api/homework/review"),
-            ("dictation", "image/png", "words", "/api/homework/review"),
+            ("arithmetic", "image/png", None, "/api/homework/review"),
+            (
+                "dictation",
+                "image/png",
+                Some("words"),
+                "/api/homework/review",
+            ),
             (
                 "reading",
                 "audio/x-m4a",
-                "reference",
+                Some("reference"),
                 "/api/homework/reading",
             ),
         ] {
@@ -245,7 +239,10 @@ mod tests {
                     let mut body = Vec::new();
                     request.as_reader().read_to_end(&mut body).unwrap();
                     let body = String::from_utf8_lossy(&body);
-                    assert!(body.contains(&format!("name=\"{field}\"")));
+                    if let Some(field) = field {
+                        assert!(body.contains(&format!("name=\"{field}\"")));
+                    }
+                    assert!(!body.contains("name=\"count\""));
                     assert!(body.contains(if kind == "reading" {
                         "name=\"audio\""
                     } else {
@@ -267,7 +264,7 @@ mod tests {
                 });
                 let result = review_at(
                     &base,
-                    &serde_json::json!({"kind":kind,"count":20,"words":"bus stop\ncamera","reference":"We read together."}),
+                    &serde_json::json!({"kind":kind,"words":"bus stop\ncamera","reference":"We read together."}),
                     if kind == "arithmetic" {
                         test_photo(190)
                     } else {
@@ -301,6 +298,7 @@ mod tests {
             request.as_reader().read_to_end(&mut body).unwrap();
             let text = String::from_utf8_lossy(&body);
             assert_eq!(text.matches("name=\"image\"").count(), 2);
+            assert!(!text.contains("name=\"count\""));
             let first_at = body
                 .windows(enhanced_first.len())
                 .position(|v| v == enhanced_first)

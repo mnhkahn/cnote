@@ -494,7 +494,6 @@
   const kind=/口算/.test(title)||/^(口算|arithmetic)$/i.test(type)?'arithmetic':/^(阅读英语|english_reading|reading)$/.test(type)||(/英语|英文/.test(title)&&/阅读|朗读/.test(title))||!!meta.reading_text||/^[ \t]*(?:英语|英文)原文[ \t]*[:：]/m.test(desc)?'reading':/^(背单词|word_memorization|dictation)$/.test(type)||/单词听写|英语.*听写|听写.*英语|背单词/.test(title)?'dictation':'';
   const block=names=>{const marker=desc.match(new RegExp('^[ \\t]*(?:'+names+')[ \\t]*[:：][ \\t]*','m'));return marker?desc.slice(marker.index+marker[0].length).split(/\n[ \t]*(?:英语译文|作业要求|打分结果|阅读英语链接|作业类型|预计用时)[ \t]*[:：]/)[0].trim():'';};
   const task=String(meta.task||block('作业内容|task'));
-  const count=Number(meta.count||line('本次应完成题数|题数')||title.match(/(\d+)\s*题/)?.[1]||desc.match(/(?:完成|前|共)\s*(\d+)\s*题/)?.[1]||task.split('\n').filter(s=>/[=＝]/.test(s)).length)||'';
   const link=String(meta.link||line('阅读英语链接|翻译链接|作业链接|链接')||task.match(/(?:https?:\/\/[^\s)]+|\/ai\/translate[^\s)]+)/)?.[0]||'').replace(/^\[[^\]]*\]\((.*)\)$/,'$1');
   let words=meta.words||line('背单词|单词听写|听写单词|词表')||(kind==='dictation'?task:'');
   if(Array.isArray(words))words=words.join('\n');
@@ -502,7 +501,7 @@
    try{const url=new URL(link||words,'https://www.cyeam.com');if(url.pathname==='/ai/translate'&&url.searchParams.has('words'))words=url.searchParams.get('words');}catch{}
    words=String(words).replace(/\(([^()]*)\)/g,' $1').replace(/（[^（）]*）/g,'').split(/[,，;；\r\n]+/).map(s=>s.trim().replace(/ +/g,' ')).filter(Boolean).join('\n');
   }
-  return {kind,count,words:String(words||''),reference:String(meta.reading_text||block('英语原文|英文原文')||''),link};
+  return {kind,words:String(words||''),reference:String(meta.reading_text||block('英语原文|英文原文')||''),link};
  }
  function homeworkReview(action){
   const text=action.data?.text?.trim();if(!text?.startsWith('作业批改：'))return null;
@@ -594,11 +593,11 @@
   const submission=a=>String(a?.name||'').match(/_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.[^.]+$/i)?.[1];
   const group=!reading&&submission(attachment)?candidates.filter(a=>submission(a)===submission(attachment)).sort((a,b)=>String(a.date||a.id).localeCompare(String(b.date||b.id))):attachment?[attachment]:[];
   let publicationPending=false,working=false,loading=false;
-  const missing=()=>group.length>2?'同一次提交超过2张图片，请分批批改。':!attachment?(reading?'暂无朗读录音，请先提交作业。':'暂无作业图片，请先提交作业。'):reading&&!fields.reference?'卡片缺少英文原文，请补充作业描述。':fields.kind==='dictation'&&!fields.words?'卡片缺少听写词表，请补充作业描述。':fields.kind==='arithmetic'&&(!Number.isInteger(fields.count)||fields.count<1||fields.count>100)?'卡片缺少本次应完成题数（1～100），请补充作业描述。':'';
-  const cacheKey=()=>JSON.stringify([card.id,fields.kind,group.map(a=>a.id),reading?fields.reference:fields.kind==='dictation'?fields.words:String(fields.count)]);
+  const missing=()=>group.length>2?'同一次提交超过2张图片，请分批批改。':!attachment?(reading?'暂无朗读录音，请先提交作业。':'暂无作业图片，请先提交作业。'):reading&&!fields.reference?'卡片缺少英文原文，请补充作业描述。':fields.kind==='dictation'&&!fields.words?'卡片缺少听写词表，请补充作业描述。':'';
+  const cacheKey=()=>JSON.stringify([card.id,fields.kind,group.map(a=>a.id),reading?fields.reference:fields.kind==='dictation'?fields.words:'']);
   const submit=button('开始自动阅卷',()=>{
    if(submit.disabled)return;
-   const extra={kind:fields.kind,attachment:attachment.id,...(!reading?{attachments:group.map(a=>a.id)}:{}),...(reading?{reference:fields.reference}:fields.kind==='dictation'?{words:fields.words}:{count:fields.count})};
+   const extra={kind:fields.kind,attachment:attachment.id,...(!reading?{attachments:group.map(a=>a.id)}:{}),...(reading?{reference:fields.reference}:fields.kind==='dictation'?{words:fields.words}:{})};
    actions.replaceChildren();
    send('review_homework',extra,status,'正在阅卷并保存结果…','阅卷失败：',cacheKey());
   },'primary');
