@@ -34,8 +34,24 @@ for(const [name,type] of [['Chromium',chromium],['WebKit',webkit]])test(name+' n
    await input.fill('[literal]');assert.equal(await page.locator('#note-find span').textContent(),'1 / 1');await press('Escape');assert.equal(await page.locator('#note-find').isVisible(),false);assert.equal(await page.locator('#editor').innerHTML(),before);
   });
   await t.test('plain paste skips formatting and table parsing; print and help are discoverable',async()=>{
-   await reset('<p></p>');await page.locator('#editor').evaluate(el=>{el.dispatchEvent(new KeyboardEvent('keydown',{key:'V',code:'KeyV',metaKey:true,shiftKey:true,bubbles:true,cancelable:true}));const data=new DataTransfer();data.setData('text/plain','a\tb\n1\t2');data.setData('text/html','<table><tr><td><b>rich</b></td></tr></table>');el.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));});assert.equal(await page.locator('#editor table,#editor b').count(),0);assert((await page.locator('#editor').textContent()).includes('a'));
-   await press('Meta+p');assert(await page.evaluate(()=>messages.some(m=>m.type==='print')));await press('Meta+/');assert.equal(await page.locator('#dialog-title').textContent(),'笔记快捷键');assert.equal(await page.locator('.shortcut-help>div').count(),36);await press('Escape');
+   async function pasteWithShortcut(modifiers){
+    await reset('<p></p>');
+    await page.locator('#editor').evaluate((el,modifiers)=>{
+     el.dispatchEvent(new KeyboardEvent('keydown',{key:'V',code:'KeyV',shiftKey:true,bubbles:true,cancelable:true,...modifiers}));
+     const data=new DataTransfer();data.setData('text/plain','a\tb\n1\t2');data.setData('text/html','<table><tr><td><b>rich</b></td></tr></table>');
+     el.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));
+    },modifiers);
+   }
+   for(const modifiers of [{metaKey:true,altKey:true,key:'◊'},{ctrlKey:true}]){
+    await pasteWithShortcut(modifiers);
+    assert.equal(await page.locator('#editor table,#editor b').count(),0);
+    assert.equal((await page.locator('#editor').textContent()).replaceAll('\n',''),'a\tb1\t2');
+   }
+   await pasteWithShortcut({metaKey:true});
+   assert.equal(await page.locator('#editor table').count(),1);
+   await press('Meta+p');assert(await page.evaluate(()=>messages.some(m=>m.type==='print')));await press('Meta+/');assert.equal(await page.locator('#dialog-title').textContent(),'笔记快捷键');assert.equal(await page.locator('.shortcut-help>div').count(),36);
+   assert.equal(await page.locator('.shortcut-help>div').filter({hasText:'粘贴为纯文本'}).locator('kbd').textContent(),'⌘⌥⇧V');
+   await press('Escape');
   });
   await t.test('table shortcut, Tab navigation and auto-added row undo',async()=>{
    await reset('<p></p>');await press('Meta+Alt+t');await page.locator('#dialog-body input').nth(0).fill('1');await page.locator('#dialog-body input').nth(1).fill('2');await page.getByRole('button',{name:'插入',exact:true}).click();await select('#editor th:first-child',true);

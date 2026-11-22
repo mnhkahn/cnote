@@ -407,6 +407,7 @@ static NSString *noteCommand(NSEvent *event) {
         case 29: key = @"0"; break; case 26: key = @"7"; break; case 28: key = @"8"; break; case 25: key = @"9"; break;
         case 33: key = @"["; break; case 30: key = @"]"; break; case 42: key = @"\\"; break; case 44: key = @"/"; break;
         case 17: if (flags & NSEventModifierFlagOption) key = @"t"; break;
+        case 9: if (flags & NSEventModifierFlagOption) key = @"v"; break;
     }
     NSString *chord = [NSString stringWithFormat:@"%@%@%@", flags & NSEventModifierFlagShift ? @"shift-" : @"", flags & NSEventModifierFlagOption ? @"alt-" : @"", key];
     return @{@"b":@"bold", @"i":@"italic", @"u":@"underline", @"shift-x":@"strikeThrough",
@@ -415,7 +416,7 @@ static NSString *noteCommand(NSEvent *event) {
         @"shift-7":@"insertOrderedList", @"shift-8":@"insertUnorderedList", @"shift-9":@"task", @"shift-b":@"quote",
         @"[":@"outdent", @"]":@"indent", @"shift-\\":@"removeFormat",
         @"shift-l":@"justifyLeft", @"shift-e":@"justifyCenter", @"shift-r":@"justifyRight", @"shift-j":@"justifyFull",
-        @"alt-t":@"table", @"shift-v":@"pastePlain", @"f":@"find", @"g":@"findNext", @"shift-g":@"findPrevious", @"p":@"print", @"/":@"shortcuts"}[chord];
+        @"alt-t":@"table", @"shift-alt-v":@"pastePlain", @"f":@"find", @"g":@"findNext", @"shift-g":@"findPrevious", @"p":@"print", @"/":@"shortcuts"}[chord];
 }
 static BOOL forwardEditingKey(NSEvent *event) {
     NSString *note = noteCommand(event);

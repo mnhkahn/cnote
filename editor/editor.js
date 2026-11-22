@@ -201,7 +201,7 @@
   ['insertOrderedList','有序列表','7',true],['insertUnorderedList','无序列表','8',true],['task','待办事项','9',true],['quote','引用','b',true],
   ['outdent','减少缩进','['],['indent','增加缩进',']'],['removeFormat','清除格式','\\',true],
   ['justifyLeft','左对齐','l',true],['justifyCenter','居中','e',true],['justifyRight','右对齐','r',true],['justifyFull','两端对齐','j',true],
-  ['table','插入表格','t',false,true],['pastePlain','粘贴为纯文本','v',true],
+  ['table','插入表格','t',false,true],['pastePlain','粘贴为纯文本','v',true,true],
   ['find','查找当前笔记','f'],['findNext','下一个匹配','g'],['findPrevious','上一个匹配','g',true],['print','打印','p'],['shortcuts','快捷键说明','/'],
  ].map(([id,label,key,shift=false,alt=false])=>({id,label,key,shift,alt,display:'⌘'+(alt?'⌥':'')+(shift?'⇧':'')+key.toUpperCase()}));
  let plainPaste=false,plainPasteTimer=null;
@@ -245,7 +245,8 @@
  function keyShortcut(e){
   if(e.isComposing||!(e.metaKey||e.ctrlKey)||(e.metaKey&&e.ctrlKey))return false;
   const key={BracketLeft:'[',BracketRight:']',Backslash:'\\',Slash:'/'}[e.code]||(/^Digit[0-9]$/.test(e.code)?e.code.slice(-1):e.altKey&&/^Key[A-Z]$/.test(e.code)?e.code.slice(-1).toLowerCase():e.key.toLowerCase());
-  const shortcut=shortcuts.find(s=>s.key===key&&s.shift===e.shiftKey&&s.alt===e.altKey);
+  const shortcut=shortcuts.find(s=>s.key===key&&s.shift===e.shiftKey&&
+    (s.alt===e.altKey||(s.id==='pastePlain'&&e.ctrlKey&&!e.altKey)));
   if(!shortcut||!formatShortcut(shortcut.id))return false;
   if(shortcut.id!=='pastePlain')e.preventDefault();return true;
  }

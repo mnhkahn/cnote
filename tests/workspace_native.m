@@ -209,7 +209,12 @@ static void webEditing(void) {
  step(@"notes / paste plain text");
  js(view,@"document.getElementById('dialog').close();cnote.focusEditor()");
  [NSPasteboard.generalPasteboard clearContents];[NSPasteboard.generalPasteboard setString:@"a\tb\n1\t2" forType:NSPasteboardTypeString];
- editKey(window,@"v",YES);spin(^BOOL{return [js(view,@"document.getElementById('editor').textContent.includes('a')&&!document.querySelector('#editor table')") boolValue];});
+ NSEvent *plainPasteEvent=[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint
+  modifierFlags:NSEventModifierFlagCommand|NSEventModifierFlagOption|NSEventModifierFlagShift
+  timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:window.windowNumber context:nil
+  characters:@"◊" charactersIgnoringModifiers:@"◊" isARepeat:NO keyCode:9];
+ [NSApp postEvent:plainPasteEvent atStart:NO];
+ spin(^BOOL{return [js(view,@"document.getElementById('editor').textContent.includes('1')&&!document.querySelector('#editor table')") boolValue];});
  before=js(view,@"document.getElementById('editor').innerHTML");
  step(@"notes / ignore formatting while dialog is open");
  js(view,@"cnote.action('new')");editKey(window,@"b",NO);
@@ -288,6 +293,8 @@ int main(int argc,const char **argv) {
   }
   CHECK(editingSelector(key(@"z",NSEventModifierFlagCommand|NSEventModifierFlagShift))==@selector(redo:));
   CHECK(editingSelector(key(@"a",NSEventModifierFlagCommand|NSEventModifierFlagShift))==NULL);
+  CHECK([noteCommand(key(@"v",NSEventModifierFlagCommand|NSEventModifierFlagShift|NSEventModifierFlagOption)) isEqual:@"pastePlain"]);
+  CHECK(noteCommand(key(@"v",NSEventModifierFlagCommand|NSEventModifierFlagShift))==nil);
   for(NSString *s in @[@"b",@"i",@"u"])CHECK(editingSelector(key(s,NSEventModifierFlagCommand|NSEventModifierFlagShift))==NULL);
   navigationMatching();
   puts("Native workspace, editing and navigation key matching passed.");
