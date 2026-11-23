@@ -352,6 +352,10 @@ impl Api {
             Some(body),
         )
     }
+    fn delete(&self, path: &str) -> Result<()> {
+        self.send_url(reqwest::Method::DELETE, &format!("{API}{path}"), &[], None)?;
+        Ok(())
+    }
     fn send_url(
         &self,
         method: reqwest::Method,
@@ -360,6 +364,7 @@ impl Api {
         body: Option<&Value>,
     ) -> Result<Value> {
         let writing = method != reqwest::Method::GET;
+        let deleting = method == reqwest::Method::DELETE;
         // Credentials stay out of request URLs, logs and errors.
         let authorization = format!(
             "OAuth oauth_consumer_key=\"{}\", oauth_token=\"{}\"",
@@ -388,6 +393,9 @@ impl Api {
                 bail!("Trello 请求失败（HTTP {}），请稍后重试", status.as_u16())
             }
             _ => {}
+        }
+        if deleting {
+            return Ok(Value::Null);
         }
         const LIMIT: usize = 20 * 1024 * 1024;
         let mut bytes = Vec::new();
@@ -721,6 +729,7 @@ fn homework_type_description(description: &str, value: &str) -> Result<String> {
 
 fn apply_homework_activity(cards: &mut [Value], actions: &[Value]) {
     let mut latest = HashMap::new();
+    let mut completions = HashMap::new();
     for action in actions {
         if action["type"] != "commentCard" {
             continue;
@@ -760,10 +769,30 @@ fn apply_homework_activity(cards: &mut [Value], actions: &[Value]) {
         if (at, completed) > (current.0, current.1) {
             *current = (at, completed, correction);
         }
+        if completed {
+            let duration = event["duration_seconds"]
+                .as_u64()
+                .filter(|&seconds| seconds <= at as u64)
+                .or_else(|| {
+                    let start = event["started_at"].as_i64()?;
+                    (1..=at).contains(&start).then(|| (at - start) as u64)
+                });
+            let current = completions.entry(card).or_insert((at, duration));
+            if at > current.0 || (at == current.0 && current.1.is_none()) {
+                *current = (at, duration);
+            }
+        }
     }
     for card in cards {
-        if let Some(&(at, false, correction)) = card["id"].as_str().and_then(|id| latest.get(id)) {
+        let id = card["id"].as_str().unwrap_or_default();
+        let activity = latest.get(id).copied();
+        let completion = completions.get(id).copied();
+        if let Some((at, false, correction)) = activity {
             card["homeworkStarted"] = json!({"at":at,"correction":correction});
+        }
+        if let Some((at, duration)) = completion {
+            card["homeworkCompletedAt"] = json!(chrono::DateTime::from_timestamp(at, 0));
+            card["homeworkDurationSeconds"] = json!(duration);
         }
     }
 }
@@ -794,6 +823,7 @@ pub fn request(v: Value) -> Result<Value> {
                 | "link_account"
                 | "link_board"
                 | "update_cell"
+                | "delete_card"
                 | "publish_homework"
                 | "review_homework"
                 | "manual_homework_review"
@@ -935,6 +965,7 @@ pub fn request(v: Value) -> Result<Value> {
         | "transcribe_audio"
         | "homework_attachments"
         | "update_cell"
+        | "delete_card"
         | "review_homework"
         | "manual_homework_review"
         | "publish_homework"
@@ -1063,6 +1094,12 @@ pub fn request(v: Value) -> Result<Value> {
             };
             Ok(json!({"card":api.put(&format!("/cards/{id}"), &body)?}))
         }
+        "delete_card" => {
+            let id = identifier(&v)?;
+            let _lock = review::Store::open(id)?;
+            api.delete(&format!("/cards/{id}"))?;
+            Ok(json!({"deleted":true}))
+        }
         "review_homework" => review::review(&api, &v),
         "manual_homework_review" => review::manual(&api, &v),
         "publish_homework" => review::retry(&api, &v),
@@ -1107,7 +1144,7 @@ pub fn request(v: Value) -> Result<Value> {
         }
         "card" => {
             let id = identifier(&v)?;
-            let card = api.get(
+            let mut card = api.get(
                 &format!("/cards/{id}"),
                 &[
                     ("fields", "all"),
@@ -1120,6 +1157,9 @@ pub fn request(v: Value) -> Result<Value> {
                 &format!("/cards/{id}/actions"),
                 &[("filter", "all"), ("limit", "1000")],
             );
+            if let Ok(Value::Array(actions)) = &actions {
+                apply_homework_activity(std::slice::from_mut(&mut card), actions);
+            }
             Ok(
                 json!({"card":card,"attachments":attachments.as_ref().ok(),"actions":actions.as_ref().ok(),"partial":attachments.is_err()||actions.is_err(),"homework_review":review::latest(id).ok().flatten()}),
             )
@@ -1539,14 +1579,21 @@ mod tests {
     }
 
     #[test]
-    fn homework_activity_uses_tablet_event_time_and_ignores_completed_attempts() {
+    fn homework_activity_uses_tablet_event_time_and_keeps_the_latest_completed_duration() {
         let comment = |card: &str, task: &str, event: &str, at: i64, correction| {
             let heading = if event == "started" {
                 "开始做作业"
             } else {
                 "作业完成"
             };
-            let payload = json!({"task_id":task, "event":event, "at":at, "correction":correction});
+            let mut payload =
+                json!({"task_id":task, "event":event, "at":at, "correction":correction});
+            if event == "completed" {
+                payload["started_at"] = json!(at - 70);
+                if correction {
+                    payload["duration_seconds"] = json!(42);
+                }
+            }
             json!({"type":"commentCard","data":{
                 "card":{"id":card},"text":format!("{heading}\n[homework-activity:v1]\n{payload}")
             }})
@@ -1561,9 +1608,11 @@ mod tests {
             &[
                 comment("active", "active", "started", 300, true),
                 comment("active", "active", "completed", 200, false),
+                comment("finished", "finished", "completed", 400, true),
                 comment("finished", "finished", "completed", 300, false),
-                comment("finished", "finished", "started", 300, false),
+                comment("finished", "finished", "started", 400, true),
                 comment("scheduled", "active", "started", 400, false),
+                comment("scheduled", "active", "completed", 500, false),
                 json!({"type":"commentCard","data":{"card":{"id":"scheduled"},"text":"开始做作业"}}),
             ],
         );
@@ -1571,8 +1620,13 @@ mod tests {
             cards[0]["homeworkStarted"],
             json!({"at":300,"correction":true})
         );
+        assert_eq!(cards[0]["homeworkDurationSeconds"], 70);
+        assert_eq!(cards[0]["homeworkCompletedAt"], "1970-01-01T00:03:20Z");
         assert!(cards[1].get("homeworkStarted").is_none());
+        assert_eq!(cards[1]["homeworkDurationSeconds"], 42);
+        assert_eq!(cards[1]["homeworkCompletedAt"], "1970-01-01T00:06:40Z");
         assert!(cards[2].get("homeworkStarted").is_none());
+        assert!(cards[2].get("homeworkDurationSeconds").is_none());
     }
     #[test]
     fn update_request_sends_json_and_handles_read_only_tokens() {
@@ -1648,6 +1702,62 @@ mod tests {
             server.join().unwrap();
         }
     }
+    #[test]
+    fn delete_accepts_empty_success_and_rejects_read_only_tokens() {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+        };
+        for status in [200, 403] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let reader = BufReader::new(stream.try_clone().unwrap());
+                let headers: Vec<_> = reader
+                    .lines()
+                    .map(Result::unwrap)
+                    .take_while(|line| !line.is_empty())
+                    .collect();
+                assert_eq!(headers[0], "DELETE /cards/test HTTP/1.1");
+                assert!(
+                    headers
+                        .iter()
+                        .any(|header| header.to_lowercase().starts_with("authorization: oauth "))
+                );
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            });
+            let api = Api {
+                client: crate::http::client().no_proxy().build().unwrap(),
+                auth: Credentials {
+                    key: "key".into(),
+                    token: "token".into(),
+                },
+            };
+            let result = api.send_url(
+                reqwest::Method::DELETE,
+                &format!("http://{addr}/cards/test"),
+                &[],
+                None,
+            );
+            if status == 200 {
+                assert_eq!(result.unwrap(), Value::Null);
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .downcast_ref::<WriteRejected>()
+                        .is_some()
+                );
+            }
+            server.join().unwrap();
+        }
+    }
+
     #[test]
     fn request_uses_authorization_header_and_sanitizes_errors() {
         use std::{

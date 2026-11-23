@@ -5,12 +5,13 @@
  const pending=new Map(),mediaUrls=new Set(),originalImages=new Map(),originalData=new Map();
  let imageViewer=null,autoTimer=null,active=false,lastRefreshAt=0;
  let sharingImage=false,editingCell=null;
+ let dismissCardMenu=null,deletingCard=false;
  let microsoftAccount='',accountEpoch=0,linkDialog=null,linkChecking=false,linkDismissed=false,linkConfirmed=false,linkSupported=false;
  function closeAccountLink(){if(linkDialog){linkDialog.close();linkDialog.remove();linkDialog=null;}}
  function account(authenticated,id){
   const next=authenticated&&id?String(id):'';if(next===microsoftAccount)return;
   const previous=microsoftAccount;microsoftAccount=next;accountEpoch++;linkChecking=false;linkDismissed=false;linkConfirmed=false;linkSupported=false;closeAccountLink();
-  if(previous||loaded){boardEpoch++;detailEpoch++;stopAutoRefresh();removeDetail();connected=false;board='';boards=[];lists=[];cards=[];loaded=false;root.replaceChildren();if(active)window.cnoteTrello.show();}
+  if(previous||loaded){boardEpoch++;detailEpoch++;stopAutoRefresh();dismissCardMenu?.();removeDetail();connected=false;board='';boards=[];lists=[];cards=[];loaded=false;root.replaceChildren();if(active)window.cnoteTrello.show();}
   if(next)checkAccountLink();
  }
  async function checkAccountLink(manual=false){
@@ -70,7 +71,11 @@
  }
  const description=card=>descriptionParts(card).text;
  const timeOverride=(card,field)=>descriptionParts(card).times[field];
- const cardTime=(card,field)=>['dateCompleted','dateLastActivity'].includes(field)?timeOverride(card,field)??card[field]:card[field];
+ function cardTime(card,field){
+  if(field==='dateCompleted')return timeOverride(card,field)??card.homeworkCompletedAt??card.dateCompleted;
+  if(field==='dateLastActivity')return timeOverride(card,field)??card.dateLastActivity;
+  return card[field];
+ }
  const listName=card=>lists.find(list=>list.id===card.idList)?.name||'未知进度';
  const submitted=card=>['已完成','已改错'].includes(listName(card).trim());
  function startedAt(card){
@@ -79,8 +84,53 @@
   return start.at*1000;
  }
  const progressLabel=card=>startedAt(card)?'已开始':listName(card);
- const taskGroup=card=>startedAt(card)?0:submitted(card)?2:1;
- const plannedOrder=card=>Number.isFinite(timestamp(card.start))?timestamp(card.start):timestamp(card.due);
+ function taskGroup(card){
+  if(submitted(card))return 4;
+  const correction=listName(card).trim()==='待改错';
+  return (correction?2:0)+(startedAt(card)?0:1);
+ }
+ function plannedMinutes(card){
+  const pattern=/^[ \t]*(?:预计用时[ \t]*[:：][ \t]*|预计[ \t]+)(\d+)[ \t]*(?:分钟)?[ \t]*(?=[；;。]|$)/gm;
+  for(const [,value] of description(card).matchAll(pattern)){
+   const minutes=Number(value);
+   if(minutes>=1&&minutes<=180)return minutes;
+  }
+  return null;
+ }
+ function plannedStart(card){
+  const start=timestamp(card.start);
+  if(Number.isFinite(start))return start;
+  const due=timestamp(card.due);
+  const range=description(card).match(/(?:^|[；;])[ \t]*(?:预计[ \t]*)?(\d{1,2}):([0-5]\d)[ \t]*[–—－~～-][ \t]*(\d{1,2}):([0-5]\d)[ \t]*[（(]北京时间[）)]/m);
+  if(range){
+   const [,startHour,startMinute,endHour,endMinute]=range.map(Number);
+   if(startHour<24&&endHour<24){
+    const minute=60000,day=1440*minute,offset=8*60*minute;
+    const date=Math.floor((due+offset)/day)*day-offset;
+    const startOfSchedule=startHour*60+startMinute,endOfSchedule=endHour*60+endMinute;
+    return date+startOfSchedule*minute-(startOfSchedule>endOfSchedule?day:0);
+   }
+  }
+  const minutes=plannedMinutes(card);
+  return minutes===null?NaN:due-minutes*60000;
+ }
+ function plannedOrder(card){
+  const start=plannedStart(card);
+  return Number.isFinite(start)?start:timestamp(card.due);
+ }
+ function actualDuration(card){
+  const seconds=card.homeworkDurationSeconds;
+  if(!Number.isSafeInteger(seconds)||seconds<0)return '';
+  const minutes=Math.floor(seconds/60),rest=seconds%60;
+  if(!minutes)return `${rest} 秒`;
+  return rest?`${minutes} 分钟 ${rest} 秒`:`${minutes} 分钟`;
+ }
+ function durationStatus(card){
+  const plan=plannedMinutes(card),actual=card.homeworkDurationSeconds;
+  if(plan===null||!Number.isSafeInteger(actual)||actual<0)return '';
+  if(actual>plan*60)return 'over';
+  return actual<plan*60?'under':'';
+ }
  const grade=card=>description(card).match(/^[ \t]*打分结果[ \t]*[:：][ \t]*([^\r\n]*)/m)?.[1].trim()||'';
  function homeworkType(card){
   const desc=description(card);
@@ -88,16 +138,22 @@
   return desc.match(/^[ \t]*(?:作业类型|类型|type)[ \t]*[:：][ \t]*([^\r\n]*)/mi)?.[1].trim()||'';
  }
  const columns=[
-  {label:'作业类型',field:'homework_type',value:homeworkType,cls:'trello-homework-type',width:9},
-  {label:'进度',field:'progress',value:progressLabel,cls:'trello-progress',width:10},
-  {label:'打分结果',field:'grade',value:grade,cls:'trello-grade',width:7},
+  {label:'作业类型',field:'homework_type',value:homeworkType,cls:'trello-homework-type',width:8},
+  {label:'进度',field:'progress',value:progressLabel,cls:'trello-progress',width:8},
+  {label:'打分结果',field:'grade',value:grade,cls:'trello-grade',width:6},
   ...[
-   ['计划开始时间','start','trello-start-at'],
+   ['预计开始时间','start','trello-start-at'],
    ['实际完成时间','dateCompleted','trello-completed-at'],
    ['预计完成时间','due','trello-due-at'],
    ['更新时间','dateLastActivity','trello-updated-at']
-  ].map(([label,field,cls])=>({label,field,cls,width:14,value:card=>timeText(cardTime(card,field)),date:true}))
+  ].map(([label,field,cls])=>({label,field,cls,width:12,value:card=>timeText(field==='start'?plannedStart(card):cardTime(card,field)),date:true})),
+  {label:'计划用时',cls:'trello-planned-duration',width:7,value:card=>{
+   const minutes=plannedMinutes(card);
+   return minutes===null?'':`${minutes} 分钟`;
+  }},
+  {label:'实际用时',cls:'trello-actual-duration',width:9,value:actualDuration,status:durationStatus}
  ];
+ const homeworkTypes=['普通作业','口算','背单词','阅读英语','预习','附件PDF'];
  function node(tag,text,cls){const el=document.createElement(tag);if(text!=null)el.textContent=text;if(cls)el.className=cls;return el;}
  function button(text,action,cls){const el=node('button',text,cls);el.type='button';el.onclick=action;return el;}
  function request(op,id,extra={},progress){return new Promise((resolve,reject)=>{const request=++serial;pending.set(request,{resolve,reject,progress});window.ipc.postMessage(JSON.stringify({type:microsoftAccount&&['status','link_status','link_account','link_board','disconnect'].includes(op)?'trello_connection':'trello',request,op,id,account_id:microsoftAccount,...extra}));});}
@@ -168,16 +224,17 @@
   document.getElementById('trello-settings').onclick=()=>{boardEpoch++;busy=false;guide('',true);};
   document.getElementById('trello-prev').onclick=()=>shift(-7);document.getElementById('trello-next').onclick=()=>shift(7);document.getElementById('trello-today').onclick=()=>{selected=new Date();render();};document.getElementById('trello-refresh').onclick=refresh;document.getElementById('trello-board').onchange=async e=>{const next=e.target.value,epoch=accountEpoch;try{if(linkConfirmed&&next)await request('link_board',next,{account_id:microsoftAccount});if(epoch!==accountEpoch)return;lists=[];cards=[];board=next;window.cnoteTools.setTrelloBoard(board);loadBoard();}catch(error){if(epoch===accountEpoch){e.target.value=board;message(error.message,true);}}};
  }
- function refresh(){if(!loaded||busy||editingCell)return;if(microsoftAccount)restore(true);else if(connected){if(board)loadBoard(false,true);else loadBoards(true);}else restore(true);}
+ function refresh(){if(!loaded||busy||editingCell||deletingCard||root.querySelector('.trello-delete-dialog[open]'))return;if(microsoftAccount)restore(true);else if(connected){if(board)loadBoard(false,true);else loadBoards(true);}else restore(true);}
  function stopAutoRefresh(){clearTimeout(autoTimer);autoTimer=null;}
  function scheduleAutoRefresh(delay=AUTO_REFRESH_MS){
   stopAutoRefresh();if(!active||document.hidden||!connected||!board)return;
-  autoTimer=setTimeout(()=>{autoTimer=null;if(!busy&&!editingCell&&!root.querySelector('dialog[open]')&&document.getElementById('trello-content')?.querySelector('.trello-table'))loadBoard(true);else scheduleAutoRefresh();},delay);
+  autoTimer=setTimeout(()=>{autoTimer=null;if(!busy&&!editingCell&&!deletingCard&&!dismissCardMenu&&!root.querySelector('dialog[open]')&&document.getElementById('trello-content')?.querySelector('.trello-table'))loadBoard(true);else scheduleAutoRefresh();},delay);
  }
  function resumeAutoRefresh(){scheduleAutoRefresh(Math.max(0,AUTO_REFRESH_MS-(Date.now()-lastRefreshAt)));}
  document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else if(active&&loaded)resumeAutoRefresh();});
  function shift(days){selected.setDate(selected.getDate()+days);render();}
  function render(){
+  dismissCardMenu?.();
   if(editingCell&&!editingCell.saving&&editingCell.table)editingCell.finish();
   updateHomeworkDownload();
   const first=new Date(selected);first.setDate(first.getDate()-(first.getDay()+6)%7);const last=new Date(first);last.setDate(last.getDate()+6);
@@ -192,15 +249,28 @@
   const body=node('tbody');
   for(const card of daily.sort((a,b)=>taskGroup(a)-taskGroup(b)||plannedOrder(a)-plannedOrder(b)||timestamp(a.due)-timestamp(b.due))){
    const row=node('tr',null,'trello-task');row.dataset.completed=String(submitted(card));
-   const titleCell=node('td');titleCell.append(button(card.name,()=>showDetail(card),'trello-open-card'));
+   const titleCell=node('td'),title=button(card.name,()=>showDetail(card),'trello-open-card');titleCell.append(title);
+   if(!readOnly()){
+    row.oncontextmenu=event=>{
+     if(event.target.closest('.trello-cell-form,.trello-cell-options'))return;
+     event.preventDefault();openCardMenu(card,title,event.clientX,event.clientY);
+    };
+    row.onkeydown=event=>{
+     if(event.key!=='ContextMenu'&&!(event.shiftKey&&event.key==='F10'))return;
+     if(event.target.closest('.trello-cell-form,.trello-cell-options'))return;
+     event.preventDefault();
+     const anchor=event.target.getBoundingClientRect();openCardMenu(card,title,anchor.left,anchor.bottom);
+    };
+   }
    row.append(titleCell);for(const column of columns){
     const cell=node('td',column.value(card)||'—',column.cls);row.append(cell);
+    if(column.status)cell.dataset.durationStatus=column.status(card);
     const start=column.field==='progress'&&startedAt(card);
     if(start){
      const time=node('time',timeText(start).slice(5),'trello-started-time');time.dateTime=new Date(start).toISOString();
      time.title='实际开始时间 '+timeText(start);cell.append(time);
     }
-    if(!readOnly()){
+    if(column.field&&!readOnly()){
      cell.classList.add('trello-editable');cell.tabIndex=0;cell.title='双击修改';
      const edit=()=>editCell(cell,card,column);
      cell.onclick=event=>{event.stopPropagation();if(window.cnotePlatform?.mobile)edit();};cell.ondblclick=event=>{event.stopPropagation();edit();};
@@ -213,10 +283,52 @@
   table.append(body);content.append(table);if(!daily.length)message('当天没有到期卡片，可选择其他日期。');else message('');
 
  }
+ function openCardMenu(card,title,x,y){
+  if(busy||deletingCard||editingCell)return;
+  dismissCardMenu?.();
+  const menu=node('div',null,'trello-card-menu');menu.setAttribute('role','menu');
+  const listeners=new AbortController(),signal=listeners.signal;
+  dismissCardMenu=()=>{listeners.abort();menu.remove();dismissCardMenu=null;};
+  const remove=button('删除作业',()=>{dismissCardMenu();confirmCardDeletion(card,title);},'danger');
+  remove.onmousedown=event=>{if(event.button===0)event.preventDefault();};
+  remove.setAttribute('role','menuitem');menu.append(remove);root.append(menu);
+  menu.style.left=Math.max(8,Math.min(x,innerWidth-menu.offsetWidth-8))+'px';
+  menu.style.top=Math.max(8,Math.min(y,innerHeight-menu.offsetHeight-8))+'px';
+  document.addEventListener('pointerdown',event=>{if(!menu.contains(event.target))dismissCardMenu();},{capture:true,signal});
+  menu.onfocusout=event=>{if(!menu.contains(event.relatedTarget))dismissCardMenu?.();};
+  menu.onkeydown=event=>{if(event.key==='Escape'){event.preventDefault();dismissCardMenu();title.focus({preventScroll:true});}};
+  remove.focus({preventScroll:true});
+ }
+ function confirmCardDeletion(card,title){
+  const dialog=node('dialog',null,'trello-delete-dialog');dialog.setAttribute('aria-label','删除作业');
+  const feedback=node('p',null,'trello-edit-feedback');feedback.setAttribute('role','status');
+  const cancel=button('取消',()=>dialog.close());cancel.autofocus=true;
+  const epoch=boardEpoch;
+  const confirm=button('确认删除',async()=>{
+   if(deletingCard||epoch!==boardEpoch)return;
+   deletingCard=true;cancel.disabled=true;confirm.disabled=true;
+   feedback.dataset.error='false';feedback.textContent='正在删除…';
+   try{
+    await request('delete_card',card.id);
+    dialog.close();
+    if(epoch!==boardEpoch)return;
+    cards=cards.filter(item=>item.id!==card.id);render();message('作业已删除');
+    document.querySelector('.trello-open-card')?.focus({preventScroll:true});
+   }catch(error){
+    feedback.dataset.error='true';feedback.textContent='删除失败：'+error.message;
+   }finally{deletingCard=false;cancel.disabled=false;confirm.disabled=false;}
+  },'danger');
+  const actions=node('div',null,'trello-editor-actions');actions.append(cancel,confirm);
+  dialog.append(node('h2','删除作业'),node('p',`将永久删除 Trello 上的「${card.name}」。此操作无法撤销。`),feedback,actions);
+  dialog.oncancel=event=>{if(deletingCard)event.preventDefault();};
+  dialog.onclose=()=>{dialog.remove();title.focus({preventScroll:true});};
+  root.append(dialog);dialog.showModal();
+ }
  function editCell(cell,card,column,onUpdate,feedback=message){
   if(editingCell||busy)return;
   const {field,label,date}=column,display=column.value(card)||'—';
   const isDescription=field==='desc';
+  const isHomeworkType=field==='homework_type';
   const overrideTime=date&&['dateCompleted','dateLastActivity'].includes(field);
   const options=field==='progress'?lists.filter(list=>!list.closed).map(list=>[list.id,list.name]):field==='grade'?[['','未评分'],...['100','优','良','中','差'].map(value=>[value,value])]:field==='dueComplete'?[['true','已标记完成'],['false','未标记完成']]:null;
   const current=field==='progress'?card.idList:field==='dueComplete'?String(!!card.dueComplete):isDescription?description(card).replace(/\r\n/g,'\n'):date?localDateTime(cardTime(card,field)):column.value(card);
@@ -234,7 +346,7 @@
    const clearingOverride=overrideTime&&!draft&&timeOverride(card,field);
    if(draft===current&&!clearingOverride){finish();cell.focus();return;}
    const value=date&&draft?new Date(draft).toISOString():draft;
-   const controls=[...menu.querySelectorAll('button,input,textarea')];
+   const controls=[...menu.querySelectorAll('button,input,textarea,select')];
    edit.saving=true;menu.setAttribute('aria-busy','true');controls.forEach(control=>control.disabled=true);feedback('正在保存…');
    try{
     const data=await request('update_cell',card.id,{field,value,...(isDescription?{previous:current}:{})});
@@ -254,7 +366,11 @@
    if(next!==null){event.preventDefault();choices[next]?.focus();}
   };
   if(!options){
-   const input=node(isDescription?'textarea':'input');input.setAttribute('aria-label',label);
+   const input=node(isHomeworkType?'select':isDescription?'textarea':'input');input.setAttribute('aria-label',label);
+   if(isHomeworkType){
+    const values=current&&!homeworkTypes.includes(current)?[current,...homeworkTypes]:homeworkTypes;
+    input.append(new Option('未设置',''),...values.map(value=>new Option(value,value)));
+   }
    if(date){input.type='datetime-local';input.required=field==='due';}
    input.value=current;
    const submit=button('保存');submit.type='submit';
@@ -721,7 +837,11 @@
     const field=node('div',null,'trello-detail-field');
     const value=column.value(full)||'—';
     field.append(node('span',column.label));
-    if(readOnly())field.append(node('span',value));
+    if(!column.field||readOnly()){
+     const text=node('span',value,column.cls);
+     if(column.status)text.dataset.durationStatus=column.status(full);
+     field.append(text);
+    }
     else{
      const control=button(value,()=>editCell(field,full,column,()=>{
       renderFields();if(column.field==='homework_type')onDescriptionChanged();if(column.field==='grade'||column.field==='homework_type')renderDescription();
@@ -783,5 +903,5 @@
    if(data.partial)body.append(node('p','部分信息加载失败，请关闭后重试，或打开 Trello 查看。'));if(!readOnly()||!data.attachments?.length)body.append(button(readOnly()?'在 Trello 打开':'在 Trello 查看完整卡片',()=>openLink(full.url||card.url),'primary'));
   }catch(error){if(epoch===detailEpoch){body.replaceChildren(node('p',error.message),button('重试',()=>showDetail(card)),button('在 Trello 打开',()=>openLink(card.url)));}}
  }
- window.cnoteTrello={receive,refresh,account,hide(){active=false;if(editingCell&&!editingCell.saving)editingCell.finish();stopAutoRefresh();detailEpoch++;removeDetail();},show(){active=true;if(loaded){resumeAutoRefresh();return;}loaded=true;board=window.cnoteTools.state.trelloBoard||'';shell();render();restore();}};
+ window.cnoteTrello={receive,refresh,account,hide(){active=false;if(editingCell&&!editingCell.saving)editingCell.finish();dismissCardMenu?.();root.querySelector('.trello-delete-dialog[open]')?.close();stopAutoRefresh();detailEpoch++;removeDetail();},show(){active=true;if(loaded){resumeAutoRefresh();return;}loaded=true;board=window.cnoteTools.state.trelloBoard||'';shell();render();restore();}};
 })();
