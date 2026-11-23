@@ -138,20 +138,20 @@
   return desc.match(/^[ \t]*(?:作业类型|类型|type)[ \t]*[:：][ \t]*([^\r\n]*)/mi)?.[1].trim()||'';
  }
  const columns=[
-  {label:'作业类型',field:'homework_type',value:homeworkType,cls:'trello-homework-type',width:8},
-  {label:'进度',field:'progress',value:progressLabel,cls:'trello-progress',width:8},
-  {label:'打分结果',field:'grade',value:grade,cls:'trello-grade',width:6},
+  {label:'作业类型',field:'homework_type',value:homeworkType,cls:'trello-homework-type',width:70},
+  {label:'进度',field:'progress',value:progressLabel,cls:'trello-progress',width:76},
+  {label:'结果',field:'grade',value:grade,cls:'trello-grade',width:64},
   ...[
    ['预计开始时间','start','trello-start-at'],
    ['实际完成时间','dateCompleted','trello-completed-at'],
    ['预计完成时间','due','trello-due-at'],
    ['更新时间','dateLastActivity','trello-updated-at']
-  ].map(([label,field,cls])=>({label,field,cls,width:12,value:card=>timeText(field==='start'?plannedStart(card):cardTime(card,field)),date:true})),
-  {label:'计划用时',cls:'trello-planned-duration',width:7,value:card=>{
+  ].map(([label,field,cls])=>({label,field,cls,width:118,value:card=>timeText(field==='start'?plannedStart(card):cardTime(card,field)),date:true})),
+  {label:'计划用时',cls:'trello-planned-duration',width:64,value:card=>{
    const minutes=plannedMinutes(card);
    return minutes===null?'':`${minutes} 分钟`;
   }},
-  {label:'实际用时',cls:'trello-actual-duration',width:9,value:actualDuration,status:durationStatus}
+  {label:'实际用时',cls:'trello-actual-duration',width:88,value:actualDuration,status:durationStatus}
  ];
  const homeworkTypes=['普通作业','口算','背单词','阅读英语','预习','附件PDF'];
  function node(tag,text,cls){const el=document.createElement(tag);if(text!=null)el.textContent=text;if(cls)el.className=cls;return el;}
@@ -245,7 +245,13 @@
   const content=document.getElementById('trello-content');content.replaceChildren();if(busy){content.append(node('p','正在加载看板…','trello-empty'));return;}
   const daily=cards.filter(c=>!c.closed&&dueDay(c)===dayKey(selected));
   const table=node('table',null,'trello-table');table.setAttribute('aria-label','当天 Trello 任务');
-  const head=node('thead'),heading=node('tr');for(const column of [{label:'标题',width:100-columns.reduce((sum,column)=>sum+column.width,0)},...columns]){const cell=node('th',column.label);cell.scope='col';cell.style.width=column.width+'%';heading.append(cell);}head.append(heading);table.append(head);
+  const widths=node('colgroup');widths.append(node('col'));
+  const head=node('thead'),heading=node('tr');
+  for(const column of [{label:'标题'},...columns]){
+   if(column.width){const col=node('col');col.style.width=column.width+'px';widths.append(col);}
+   const cell=node('th',column.label);cell.scope='col';heading.append(cell);
+  }
+  head.append(heading);table.append(widths,head);
   const body=node('tbody');
   for(const card of daily.sort((a,b)=>taskGroup(a)-taskGroup(b)||plannedOrder(a)-plannedOrder(b)||timestamp(a.due)-timestamp(b.due))){
    const row=node('tr',null,'trello-task');row.dataset.completed=String(submitted(card));
