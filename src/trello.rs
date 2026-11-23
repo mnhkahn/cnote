@@ -790,8 +790,11 @@ fn apply_homework_activity(cards: &mut [Value], actions: &[Value]) {
         if let Some((at, false, correction)) = activity {
             card["homeworkStarted"] = json!({"at":at,"correction":correction});
         }
-        if let Some((at, duration)) = completion {
-            card["homeworkCompletedAt"] = json!(chrono::DateTime::from_timestamp(at, 0));
+        if let Some((at, duration)) = completion
+            && let Some(completed_at) = chrono::DateTime::from_timestamp(at, 0)
+        {
+            card["homeworkCompletedAt"] =
+                json!(completed_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
             card["homeworkDurationSeconds"] = json!(duration);
         }
     }
