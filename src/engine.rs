@@ -17,6 +17,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub const TRELLO_REFRESH_INTERVALS: [u64; 3] = [1, 5, 10];
+pub const DEFAULT_TRELLO_REFRESH_MINUTES: u64 = 5;
+const TRELLO_REFRESH_SETTING: &str = "trello_refresh_minutes";
+
 pub enum Command {
     Web(Value),
     SerializedChange(String),
@@ -38,6 +42,9 @@ pub enum Event {
     },
     Theme {
         theme: Theme,
+    },
+    TrelloRefreshInterval {
+        minutes: u64,
     },
     State {
         finder_enabled: bool,
@@ -148,6 +155,17 @@ impl Engine {
             .and_then(|value| Theme::parse(&value))
             .unwrap_or_default();
         self.emit(Event::Theme { theme });
+    }
+    fn restore_trello_refresh_interval(&self) {
+        let minutes = self
+            .db
+            .setting(TRELLO_REFRESH_SETTING)
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse().ok())
+            .filter(|minutes| TRELLO_REFRESH_INTERVALS.contains(minutes))
+            .unwrap_or(DEFAULT_TRELLO_REFRESH_MINUTES);
+        self.emit(Event::TrelloRefreshInterval { minutes });
     }
     fn state(&self) -> Result<()> {
         crate::trello::account_changed(
@@ -531,6 +549,15 @@ impl Engine {
                     Theme::parse(v["value"].as_str().unwrap_or_default()).context("未知主题")?;
                 self.db.set_setting("theme", theme.as_str())?;
                 self.emit(Event::Theme { theme });
+            }
+            "trello_refresh_interval" => {
+                let minutes = v["minutes"]
+                    .as_u64()
+                    .filter(|minutes| TRELLO_REFRESH_INTERVALS.contains(minutes))
+                    .context("不支持的作业刷新间隔")?;
+                self.db
+                    .set_setting(TRELLO_REFRESH_SETTING, &minutes.to_string())?;
+                self.emit(Event::TrelloRefreshInterval { minutes });
             }
             "change" => {
                 self.db.save_html(
@@ -1077,6 +1104,7 @@ pub fn start(path: PathBuf) -> Handle {
                 e.job(Job::Restore);
             }
             e.restore_theme();
+            e.restore_trello_refresh_interval();
             let _ = e.state();
             loop {
                 let timeout = if e.warm_queue.is_empty() {
@@ -1464,6 +1492,36 @@ mod tests {
             matches!(rx.try_recv().unwrap(), Event::Saved { title, .. } if title == "AI各种琢磨")
         );
         assert!(rx.try_recv().is_err());
+    }
+    #[test]
+    fn trello_refresh_interval_is_saved_and_restored() {
+        let mut e = engine();
+        let (tx, rx) = async_channel::unbounded();
+        e.events = tx;
+        let next_interval = || match rx.try_recv().unwrap() {
+            Event::TrelloRefreshInterval { minutes } => minutes,
+            event => panic!("expected refresh interval, got {event:?}"),
+        };
+
+        e.restore_trello_refresh_interval();
+        assert_eq!(next_interval(), 5);
+        e.dispatch(json!({"type":"trello_refresh_interval","minutes":1}))
+            .unwrap();
+        assert_eq!(next_interval(), 1);
+        assert_eq!(
+            e.db.setting(TRELLO_REFRESH_SETTING).unwrap().as_deref(),
+            Some("1")
+        );
+        assert!(
+            e.dispatch(json!({"type":"trello_refresh_interval","minutes":0}))
+                .is_err()
+        );
+        e.restore_trello_refresh_interval();
+        assert_eq!(next_interval(), 1);
+
+        e.db.set_setting(TRELLO_REFRESH_SETTING, "invalid").unwrap();
+        e.restore_trello_refresh_interval();
+        assert_eq!(next_interval(), 5);
     }
     #[test]
     fn theme_selection_is_saved_and_restored_independently_of_notes() {

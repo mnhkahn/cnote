@@ -146,6 +146,51 @@ int cnote_image_save_prompt(const char *directory, const char *name, void *conte
     return 1;
 }
 
+static NSAlert *settingsSheet;
+static BOOL testSettings;
+
+int cnote_workspace_open_settings(uint64_t current, const uint64_t *intervals, size_t count,
+                                  void *context, void (*callback)(void *, uint64_t)) {
+    NSWindow *parent = NSApp.mainWindow;
+    if (!parent || parent.attachedSheet || settingsSheet) return 0;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"CNote 设置";
+    alert.informativeText = @"作业自动刷新间隔";
+    NSButton *save = [alert addButtonWithTitle:@"保存"];
+    [alert addButtonWithTitle:@"取消"].keyEquivalent = @"\e";
+    NSPopUpButton *choices = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 220, 26) pullsDown:NO];
+    choices.accessibilityLabel = alert.informativeText;
+    for (size_t i = 0; i < count; i++) {
+        [choices addItemWithTitle:[NSString stringWithFormat:@"%llu 分钟", (unsigned long long)intervals[i]]];
+        choices.lastItem.tag = (NSInteger)intervals[i];
+    }
+    [choices selectItemWithTag:(NSInteger)current];
+    alert.accessoryView = choices;
+    settingsSheet = alert;
+    // Present after GPUI has released its window borrow.
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopDefaultMode, ^{
+        if (!parent.visible || parent.attachedSheet) {
+            settingsSheet = nil;
+            callback(context, 0);
+            return;
+        }
+        [alert beginSheetModalForWindow:parent completionHandler:^(NSModalResponse response) {
+            uint64_t minutes = response == NSAlertFirstButtonReturn ? (uint64_t)choices.selectedTag : 0;
+            settingsSheet = nil;
+            callback(context, minutes);
+        }];
+        if (testSettings) {
+            testSettings = NO;
+            NSCAssert(choices.selectedTag == 5, @"The settings sheet must select the default refresh interval");
+            [choices selectItemWithTag:1];
+            [save performClick:nil];
+        }
+    });
+    CFRunLoopWakeUp(CFRunLoopGetMain());
+    return 1;
+}
+
 // Keep the file alive until the picker is dismissed or the selected service
 // has finished reading it, including while AirDrop waits for a recipient.
 @interface CNoteImageShare : NSObject <NSSharingServicePickerDelegate, NSSharingServiceDelegate>
@@ -468,6 +513,10 @@ int cnote_workspace_install(void (*callback)(unsigned int)) {
     if (!workspaceMonitor) {
         workspaceMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
             NSEventModifierFlags flags = event.modifierFlags;
+            if ((flags & NSEventModifierFlagDeviceIndependentFlagsMask) == NSEventModifierFlagCommand
+                && [event.charactersIgnoringModifiers isEqualToString:@","]
+                && focusedWebView(event)
+                && [NSApp.mainMenu performKeyEquivalent:event]) return nil;
             if ((flags & NSEventModifierFlagCommand) && !(flags & (NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift)) && [event.charactersIgnoringModifiers.lowercaseString isEqualToString:@"q"]) {
                 WKWebView *view = focusedWebView(event);
                 if (view && cnote_web_host_close((__bridge void *)view)) return nil;
@@ -525,6 +574,25 @@ void cnote_workspace_test_more_menu(void) {
         NSMenuItem *item = [theme itemWithTitle:@"深色"];
         BOOL dispatched = [NSApp sendAction:item.action to:item.target from:item];
         NSCAssert(dispatched, @"Theme menu action must reach GPUI");
+    });
+}
+void cnote_workspace_test_settings(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSMenuItem *settings = [NSApp.mainMenu.itemArray.firstObject.submenu itemWithTitle:@"设置…"];
+        NSCAssert([settings.keyEquivalent isEqualToString:@","] && settings.keyEquivalentModifierMask == NSEventModifierFlagCommand,
+                  @"The application menu must show Command-comma for Settings");
+        testSettings = YES;
+        BOOL dispatched;
+        if (strcmp(getenv("CNOTE_SETTINGS_SMOKE"), "shortcut") == 0) {
+            NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint
+                modifierFlags:NSEventModifierFlagCommand timestamp:NSProcessInfo.processInfo.systemUptime
+                windowNumber:NSApp.mainWindow.windowNumber context:nil characters:@","
+                charactersIgnoringModifiers:@"," isARepeat:NO keyCode:43];
+            dispatched = [NSApp.mainMenu performKeyEquivalent:event];
+        } else {
+            dispatched = [NSApp sendAction:settings.action to:NSApp.delegate from:settings];
+        }
+        NSCAssert(dispatched, @"Settings action must reach GPUI");
     });
 }
 // The smoke test posts real Cocoa key events while WKWebView is first responder.

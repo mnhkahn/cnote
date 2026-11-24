@@ -5,6 +5,7 @@ actions!(
     cnote,
     [
         Quit,
+        OpenSettings,
         NewNote,
         Save,
         Sync,
@@ -48,6 +49,7 @@ actions!(
 pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-1", ShowNotes, None),
         KeyBinding::new("cmd-2", ShowText, None),
         KeyBinding::new("cmd-3", ShowDiff, None),
@@ -69,6 +71,11 @@ pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
     set_menus(cx, Theme::System);
     // App-menu actions bubble while the active window is borrowed by GPUI.
     // Defer accessing it until the dispatch has released that borrow.
+    cx.on_action(move |_: &OpenSettings, cx| {
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |v, _, _| v.open_settings());
+        });
+    });
     cx.on_action(move |_: &ThemeSystem, cx| {
         cx.defer(move |cx| {
             let _ = window.update(cx, |v, _, cx| v.set_theme(Theme::System, cx));
@@ -271,7 +278,11 @@ pub fn install(cx: &mut App, window: WindowHandle<Notebook>) {
 
 pub fn set_menus(cx: &mut App, theme: Theme) {
     cx.set_menus([
-        Menu::new("CNote").items([MenuItem::action("退出 CNote", Quit)]),
+        Menu::new("CNote").items([
+            MenuItem::action("设置…", OpenSettings),
+            MenuItem::separator(),
+            MenuItem::action("退出 CNote", Quit),
+        ]),
         Menu::new("文件").items([
             MenuItem::action("新建笔记…", NewNote),
             MenuItem::action("保存并同步笔记", Save),

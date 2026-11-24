@@ -1,5 +1,5 @@
 use crate::{
-    engine::{Command, Event, Handle},
+    engine::{Command, DEFAULT_TRELLO_REFRESH_MINUTES, Event, Handle},
     icons,
     store::Summary,
     theme::Theme,
@@ -26,6 +26,7 @@ pub struct Notebook {
     authenticated: bool,
     sidebar: bool,
     theme: Theme,
+    trello_refresh_minutes: u64,
     theme_preview: Option<Theme>,
     smoke_theme_step: Option<usize>,
     context_menu: Option<(String, Point<Pixels>)>,
@@ -211,6 +212,7 @@ impl Notebook {
             authenticated: false,
             sidebar: true,
             theme: Theme::System,
+            trello_refresh_minutes: DEFAULT_TRELLO_REFRESH_MINUTES,
             theme_preview: None,
             smoke_theme_step: None,
             context_menu: None,
@@ -260,6 +262,15 @@ impl Notebook {
         let _ = self
             .tx
             .send(Command::Web(json!({"type":"theme","value":theme.as_str()})));
+    }
+    pub fn open_settings(&self) {
+        workspace::open_settings(self.trello_refresh_minutes, self.tx.clone());
+    }
+    fn send_trello_refresh_interval(&self) {
+        self.js(&format!(
+            "window.cnoteTrello?.setRefreshInterval({})",
+            self.trello_refresh_minutes
+        ));
     }
     fn active_view(&self) -> Option<&Rc<wry::WebView>> {
         self.view.as_ref()
@@ -663,6 +674,7 @@ impl Notebook {
                     crate::text_file::offer_defaults();
                 }
                 // A launch URL may select a tool before the web page is ready.
+                self.send_trello_refresh_interval();
                 self.js(&format!("cnoteTools.show({})", self.workspace.index()));
                 for e in std::mem::take(&mut self.pending) {
                     self.deliver(e, cx);
@@ -688,6 +700,10 @@ impl Notebook {
                     }
                     if let Some(view) = &self.view {
                         let _ = view.focus();
+                    }
+                    if std::env::var_os("CNOTE_SETTINGS_SMOKE").is_some() {
+                        workspace::test_settings();
+                        return;
                     }
                     workspace::test_key(Workspace::Text);
                 }
@@ -1017,6 +1033,16 @@ impl Notebook {
                 }
             }
             Event::Theme { theme } => self.apply_theme(*theme, cx),
+            Event::TrelloRefreshInterval { minutes } => {
+                self.trello_refresh_minutes = *minutes;
+                if self.ready {
+                    self.send_trello_refresh_interval();
+                }
+                if smoke() && *minutes == 1 && std::env::var_os("CNOTE_SETTINGS_SMOKE").is_some() {
+                    self.request_close();
+                }
+                return;
+            }
             Event::State {
                 notes,
                 selected,

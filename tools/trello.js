@@ -43,7 +43,8 @@
   }catch(error){if(epoch===accountEpoch&&manual)message(error.message,true);}
   finally{if(epoch===accountEpoch)linkChecking=false;}
  }
- const AUTO_REFRESH_MS=300000;
+ let refreshMinutes=5;
+ const refreshIntervalMs=()=>refreshMinutes*60_000;
  const dayKey=date=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
  const dueDay=card=>card.due&&Number.isFinite(new Date(card.due).getTime())?dayKey(new Date(card.due)):'';
  const timestamp=value=>value==null||value===''?NaN:new Date(value).getTime();
@@ -220,8 +221,9 @@
   el.append(text.slice(end));
   return el;
  }
- function shell(){root.innerHTML='<div class="trello-header"><h1>作业周历</h1><div class="trello-controls"><select id="trello-board" aria-label="选择 Trello 看板"></select><button id="trello-refresh" type="button" title="刷新并恢复默认排序（⌘R）" aria-keyshortcuts="Meta+R">刷新</button><div class="trello-settings-actions"><button id="trello-settings" type="button">关联设置</button><button id="trello-download-homework" type="button" title="下载当前选中日期所有作业的图片和音频">下载作业</button></div></div></div><div class="trello-nav"><div><button id="trello-prev" aria-label="上一周">‹</button><button id="trello-today">今天</button><button id="trello-next" aria-label="下一周">›</button></div><strong id="trello-range"></strong><span title="查看卡片详情时暂缓刷新">按截止日期 · 每五分钟自动刷新</span></div><div id="trello-week" aria-label="周历"></div><div class="trello-list-panel"><div id="trello-message" role="status"></div><div id="trello-content"></div></div>';
+ function shell(){root.innerHTML='<div class="trello-header"><h1>作业周历</h1><div class="trello-controls"><select id="trello-board" aria-label="选择 Trello 看板"></select><button id="trello-refresh" type="button" title="刷新并恢复默认排序（⌘R）" aria-keyshortcuts="Meta+R">刷新</button><div class="trello-settings-actions"><button id="trello-settings" type="button">关联设置</button><button id="trello-download-homework" type="button" title="下载当前选中日期所有作业的图片和音频">下载作业</button></div></div></div><div class="trello-nav"><div><button id="trello-prev" aria-label="上一周">‹</button><button id="trello-today">今天</button><button id="trello-next" aria-label="下一周">›</button></div><strong id="trello-range"></strong><span id="trello-refresh-interval" title="查看卡片详情时暂缓刷新"></span></div><div id="trello-week" aria-label="周历"></div><div class="trello-list-panel"><div id="trello-message" role="status"></div><div id="trello-content"></div></div>';
   const download=document.getElementById('trello-download-homework');
+  updateRefreshIntervalLabel();
   if(readOnly())download.remove();
   else download.onclick=downloadHomework;
   document.getElementById('trello-settings').onclick=()=>{boardEpoch++;busy=false;guide('',true);};
@@ -233,11 +235,19 @@
   if(microsoftAccount)restore(true);else if(connected){if(board)loadBoard(false,true);else loadBoards(true);}else restore(true);
  }
  function stopAutoRefresh(){clearTimeout(autoTimer);autoTimer=null;}
- function scheduleAutoRefresh(delay=AUTO_REFRESH_MS){
+ function scheduleAutoRefresh(delay=refreshIntervalMs()){
   stopAutoRefresh();if(!active||document.hidden||!connected||!board)return;
-  autoTimer=setTimeout(()=>{autoTimer=null;if(!busy&&!editingCell&&!deletingCard&&!dismissTableMenu&&!root.querySelector('dialog[open]')&&document.getElementById('trello-content')?.querySelector('.trello-table'))loadBoard(true);else scheduleAutoRefresh();},delay);
+  autoTimer=setTimeout(()=>{autoTimer=null;if(!busy&&!editingCell&&!deletingCard&&!dismissTableMenu&&!root.querySelector('dialog[open]')&&document.getElementById('trello-content')?.querySelector('.trello-table'))loadBoard(true,true);else scheduleAutoRefresh();},delay);
  }
- function resumeAutoRefresh(){scheduleAutoRefresh(Math.max(0,AUTO_REFRESH_MS-(Date.now()-lastRefreshAt)));}
+ function resumeAutoRefresh(){scheduleAutoRefresh(Math.max(0,refreshIntervalMs()-(Date.now()-lastRefreshAt)));}
+ function updateRefreshIntervalLabel(){
+  const label=document.getElementById('trello-refresh-interval');
+  if(label)label.textContent=`按截止日期 · 每 ${refreshMinutes} 分钟自动刷新`;
+ }
+ function setRefreshInterval(minutes){
+  if(!Number.isInteger(minutes)||minutes<1||minutes===refreshMinutes)return;
+  refreshMinutes=minutes;updateRefreshIntervalLabel();resumeAutoRefresh();
+ }
  document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else if(active&&loaded)resumeAutoRefresh();});
  function shift(days){selected.setDate(selected.getDate()+days);render();}
  function changeTitleSort(direction){
@@ -974,5 +984,5 @@
    if(data.partial)body.append(node('p','部分信息加载失败，请关闭后重试，或打开 Trello 查看。'));if(!readOnly()||!data.attachments?.length)body.append(button(readOnly()?'在 Trello 打开':'在 Trello 查看完整卡片',()=>openLink(full.url||card.url),'primary'));
   }catch(error){if(epoch===detailEpoch){body.replaceChildren(node('p',error.message),button('重试',()=>showDetail(card)),button('在 Trello 打开',()=>openLink(card.url)));}}
  }
- window.cnoteTrello={receive,refresh,account,hide(){active=false;if(editingCell&&!editingCell.saving)editingCell.finish();dismissTableMenu?.();root.querySelector('.trello-delete-dialog[open]')?.close();stopAutoRefresh();detailEpoch++;removeDetail();},show(){active=true;if(loaded){resumeAutoRefresh();return;}loaded=true;board=window.cnoteTools.state.trelloBoard||'';shell();render();restore();}};
+ window.cnoteTrello={receive,refresh,account,setRefreshInterval,hide(){active=false;if(editingCell&&!editingCell.saving)editingCell.finish();dismissTableMenu?.();root.querySelector('.trello-delete-dialog[open]')?.close();stopAutoRefresh();detailEpoch++;removeDetail();},show(){active=true;if(loaded){resumeAutoRefresh();return;}loaded=true;board=window.cnoteTools.state.trelloBoard||'';shell();render();restore();}};
 })();

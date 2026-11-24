@@ -299,6 +299,14 @@ unsafe extern "C" {
     fn cnote_workspace_test_key(index: u32);
     fn cnote_workspace_show_more_menu();
     fn cnote_workspace_test_more_menu();
+    fn cnote_workspace_test_settings();
+    fn cnote_workspace_open_settings(
+        current: u64,
+        intervals: *const u64,
+        count: usize,
+        context: *mut std::ffi::c_void,
+        callback: extern "C" fn(*mut std::ffi::c_void, u64),
+    ) -> std::ffi::c_int;
     fn cnote_workspace_test_navigation(index: u32, shift: std::ffi::c_int);
 }
 type ImageShareResult = anyhow::Result<bool>;
@@ -397,6 +405,37 @@ pub fn show_more_menu() {
 
 pub fn test_more_menu() {
     unsafe { cnote_workspace_test_more_menu() };
+}
+pub fn test_settings() {
+    unsafe { cnote_workspace_test_settings() };
+}
+
+pub fn open_settings(current: u64, tx: std::sync::mpsc::Sender<crate::engine::Command>) {
+    use crate::engine::{Command, TRELLO_REFRESH_INTERVALS};
+
+    type Sender = std::sync::mpsc::Sender<Command>;
+    extern "C" fn selected(context: *mut std::ffi::c_void, minutes: u64) {
+        let tx = unsafe { Box::from_raw(context.cast::<Sender>()) };
+        if TRELLO_REFRESH_INTERVALS.contains(&minutes) {
+            let _ = tx.send(Command::Web(
+                serde_json::json!({"type":"trello_refresh_interval","minutes":minutes}),
+            ));
+        }
+    }
+
+    let context = Box::into_raw(Box::new(tx));
+    let accepted = unsafe {
+        cnote_workspace_open_settings(
+            current,
+            TRELLO_REFRESH_INTERVALS.as_ptr(),
+            TRELLO_REFRESH_INTERVALS.len(),
+            context.cast(),
+            selected,
+        )
+    };
+    if accepted == 0 {
+        unsafe { drop(Box::from_raw(context)) };
+    }
 }
 
 pub fn test_key(page: Workspace) {
